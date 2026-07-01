@@ -1,0 +1,32 @@
+:root {
+  --color-primary: #082b6f;
+  --color-primary-dark: #031b46;
+  --color-accent: #e9282b;
+  --color-soft-blue: #6f8fd7;
+  --color-bg: #fafbff;
+  --color-panel: #eef4ff;
+  --color-border: #d8e0f0;
+  --color-text: #334155;
+
+  --color-status-pending: #f59e0b;
+  --color-status-approved: #16a34a;
+  --color-status-rejected: #dc2626;
+  --color-status-waiting: #64748b;
+  --color-status-priority: #e9282b;
+
+  font: 16px/1.5 system-ui, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+body {
+  margin: 0;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  color: var(--color-primary);
+}

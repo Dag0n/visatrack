@@ -1,0 +1,11 @@
+*.p8
+*.pem
+*.key
+.DS_Store
+/tmp/
+/scripts/
+/local/
+/mega.json
+__pycache__/
+backend/.gocache/
+backend/pb_data_old/
