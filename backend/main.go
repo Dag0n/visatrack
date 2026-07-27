@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"math"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-ozzo/ozzo-validation/v4"
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
@@ -31,12 +33,12 @@ type countryStat struct {
 }
 
 type monthStat struct {
-	Month      string  `json:"month"`
-	Count      int     `json:"count"`
-	AvgDays    float64 `json:"avgDays"`
-	MinDays    float64 `json:"minDays"`
-	MaxDays    float64 `json:"maxDays"`
-	MedianDays float64 `json:"medianDays"`
+	Month         string  `json:"month"`
+	Count         int     `json:"count"`
+	AvgDays       float64 `json:"avgDays"`
+	MedianDays    float64 `json:"medianDays"`
+	LowerQuartile float64 `json:"lowerQuartile"`
+	UpperQuartile float64 `json:"upperQuartile"`
 }
 
 type statsResponse struct {
@@ -45,7 +47,7 @@ type statsResponse struct {
 	ByVisaType map[string][]groupStat `json:"byVisaType"`
 	ByPriority map[string][]groupStat `json:"byPriority"`
 	ByCountry  []countryStat          `json:"byCountry"`
-	ByMonth    []monthStat            `json:"byMonth"`
+	ByMonth    map[string][]monthStat `json:"byMonth"`
 }
 
 type countryMonthRow struct {
@@ -53,12 +55,13 @@ type countryMonthRow struct {
 	VisaType        string  `json:"visa_type"`
 	PriorityService string  `json:"priority_service"`
 	Count           int     `json:"count"`
+	MeasuredCount   int     `json:"measured_count"`
 	AvgDays         float64 `json:"avg_days"`
 }
 
 type countryStatsResponse struct {
-	Country string             `json:"country"`
-	Rows    []countryMonthRow  `json:"rows"`
+	Country string            `json:"country"`
+	Rows    []countryMonthRow `json:"rows"`
 }
 
 type rawCountryApp struct {
@@ -66,6 +69,23 @@ type rawCountryApp struct {
 	PriorityService string `db:"priority_service"`
 	BiometricsDate  string `db:"biometrics_date"`
 	DecisionDate    string `db:"decision_date"`
+}
+
+type cohortResponse struct {
+	Count         int     `json:"count"`
+	MedianDays    float64 `json:"medianDays"`
+	LowerQuartile float64 `json:"lowerQuartile"`
+	UpperQuartile float64 `json:"upperQuartile"`
+	DecidedByNow  int     `json:"decidedByNow"`
+	Scope         string  `json:"scope"`
+	Country       string  `json:"country"`
+}
+
+type rawCohortApp struct {
+	CountryID      string `db:"country_id"`
+	Country        string `db:"country"`
+	BiometricsDate string `db:"biometrics_date"`
+	DecisionDate   string `db:"decision_date"`
 }
 
 // rollingWindows maps the window keys exposed to the frontend to how many
@@ -92,10 +112,14 @@ func main() {
 		Automigrate: false,
 	})
 
-	// Mask reddit_username for anonymous viewers; anyone signed in (any
-	// account) sees the real value. Applies to every built-in record
-	// response (list/view/realtime) for this collection.
+	// Keep private notes and the owner's record id out of public API responses.
+	// The owner can still retrieve both when editing their own application.
 	app.OnRecordEnrich("applications").BindFunc(func(e *core.RecordEnrichEvent) error {
+		isOwner := e.RequestInfo.Auth != nil &&
+			e.Record.GetString("user") == e.RequestInfo.Auth.Id
+		if !isOwner {
+			e.Record.Hide("notes", "user")
+		}
 		if e.RequestInfo.Auth == nil {
 			username := e.Record.GetString("reddit_username")
 			if username != "" {
@@ -104,6 +128,15 @@ func main() {
 		}
 		return e.Next()
 	})
+
+	validateApplicationRequest := func(e *core.RecordRequestEvent) error {
+		if errs := validateApplicationTimeline(e.Record, time.Now()); len(errs) > 0 {
+			return errs
+		}
+		return e.Next()
+	}
+	app.OnRecordCreateRequest("applications").BindFunc(validateApplicationRequest)
+	app.OnRecordUpdateRequest("applications").BindFunc(validateApplicationRequest)
 
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
 		se.Router.GET("/api/custom/stats", func(e *core.RequestEvent) error {
@@ -118,76 +151,102 @@ func main() {
 		})
 
 		se.Router.GET("/api/custom/country-stats", func(e *core.RequestEvent) error {
-				country := strings.TrimSpace(e.Request.URL.Query().Get("country"))
-				if country == "" {
-					return e.BadRequestError("country parameter is required", nil)
-				}
+			country := strings.TrimSpace(e.Request.URL.Query().Get("country"))
+			if country == "" {
+				return e.BadRequestError("country parameter is required", nil)
+			}
 
-				cutoff := time.Now().AddDate(0, -12, 0).Format("2006-01-02")
+			cutoff := time.Now().AddDate(0, -12, 0).Format("2006-01-02")
 
-				var raw []rawCountryApp
-				err := e.App.DB().NewQuery(
-					`SELECT a.visa_type, a.priority_service, a.biometrics_date, a.decision_date
+			var raw []rawCountryApp
+			err := e.App.DB().NewQuery(
+				`SELECT a.visa_type, a.priority_service, a.biometrics_date, a.decision_date
 					 FROM applications a
 					 LEFT JOIN countries c ON c.id = a.country_id
 					 WHERE c.name = {:country}
 					   AND a.outcome IN ('approved', 'rejected')
 					   AND a.decision_date >= {:cutoff}`,
-				).Bind(dbx.Params{"country": country, "cutoff": cutoff}).All(&raw)
-				if err != nil {
-					return e.InternalServerError("failed to query country stats", err)
-				}
+			).Bind(dbx.Params{"country": country, "cutoff": cutoff}).All(&raw)
+			if err != nil {
+				return e.InternalServerError("failed to query country stats", err)
+			}
 
-				type aggKey struct {
-					Month           string
-					VisaType        string
-					PriorityService string
-				}
-				aggs := map[aggKey]*dayAgg{}
+			type aggKey struct {
+				Month           string
+				VisaType        string
+				PriorityService string
+			}
+			type countryMonthAgg struct {
+				decided  int
+				measured int
+				sum      float64
+			}
+			aggs := map[aggKey]*countryMonthAgg{}
 
-				for _, r := range raw {
-					decision, ok := parseDate(r.DecisionDate)
-					if !ok {
-						continue
-					}
-					month := decision.Format("2006-01")
-					key := aggKey{month, r.VisaType, r.PriorityService}
-					if aggs[key] == nil {
-						aggs[key] = &dayAgg{}
-					}
-					days, hasDays := processingDays(rawApplication{
-						BiometricsDate: r.BiometricsDate,
-						DecisionDate:   r.DecisionDate,
-					})
-					aggs[key].count++
-					if hasDays {
-						aggs[key].sum += days
-					}
+			for _, r := range raw {
+				decision, ok := parseDate(r.DecisionDate)
+				if !ok {
+					continue
 				}
-
-				rows := []countryMonthRow{}
-				for key, agg := range aggs {
-					avgDays := 0.0
-					if agg.count > 0 && agg.sum > 0 {
-						avgDays = math.Round(agg.sum/float64(agg.count)*10) / 10
-					}
-					rows = append(rows, countryMonthRow{
-						Month:           key.Month,
-						VisaType:        key.VisaType,
-						PriorityService: key.PriorityService,
-						Count:           agg.count,
-						AvgDays:         avgDays,
-					})
+				month := decision.Format("2006-01")
+				key := aggKey{month, r.VisaType, r.PriorityService}
+				if aggs[key] == nil {
+					aggs[key] = &countryMonthAgg{}
 				}
-				sort.Slice(rows, func(i, j int) bool {
-					if rows[i].Month != rows[j].Month {
-						return rows[i].Month < rows[j].Month
-					}
-					return rows[i].VisaType < rows[j].VisaType
+				days, hasDays := processingDays(rawApplication{
+					BiometricsDate: r.BiometricsDate,
+					DecisionDate:   r.DecisionDate,
 				})
+				aggs[key].decided++
+				if hasDays {
+					aggs[key].measured++
+					aggs[key].sum += days
+				}
+			}
 
-				return e.JSON(http.StatusOK, countryStatsResponse{Country: country, Rows: rows})
+			rows := []countryMonthRow{}
+			for key, agg := range aggs {
+				avgDays := 0.0
+				if agg.measured > 0 {
+					avgDays = math.Round(agg.sum/float64(agg.measured)*10) / 10
+				}
+				rows = append(rows, countryMonthRow{
+					Month:           key.Month,
+					VisaType:        key.VisaType,
+					PriorityService: key.PriorityService,
+					Count:           agg.decided,
+					MeasuredCount:   agg.measured,
+					AvgDays:         avgDays,
+				})
+			}
+			sort.Slice(rows, func(i, j int) bool {
+				if rows[i].Month != rows[j].Month {
+					return rows[i].Month < rows[j].Month
+				}
+				return rows[i].VisaType < rows[j].VisaType
 			})
+
+			return e.JSON(http.StatusOK, countryStatsResponse{Country: country, Rows: rows})
+		})
+
+		se.Router.GET("/api/custom/cohort", func(e *core.RequestEvent) error {
+			countryID := strings.TrimSpace(e.Request.URL.Query().Get("country"))
+			visaType := strings.TrimSpace(e.Request.URL.Query().Get("visaType"))
+			priority := strings.TrimSpace(e.Request.URL.Query().Get("priority"))
+			elapsed := 0
+			if _, err := fmt.Sscanf(e.Request.URL.Query().Get("elapsed"), "%d", &elapsed); err != nil {
+				elapsed = 0
+			}
+			if countryID == "" || visaType == "" || !validPriorities[priority] {
+				return e.BadRequestError("country, visaType and priority are required", nil)
+			}
+
+			stats, err := buildCohort(e.App, countryID, visaType, priority, elapsed)
+			if err != nil {
+				return e.InternalServerError("failed to build cohort", err)
+			}
+			return e.JSON(http.StatusOK, stats)
+		})
 
 		se.Router.POST("/api/custom/claim", func(e *core.RequestEvent) error {
 			if e.Auth == nil {
@@ -245,6 +304,72 @@ func maskRedditUsername(username string) string {
 	return string(runes[0]) + "***" + string(runes[len(runes)-1])
 }
 
+func validateApplicationTimeline(record *core.Record, now time.Time) validation.Errors {
+	errs := validation.Errors{}
+	dateFields := []string{
+		"application_date",
+		"biometrics_date",
+		"eco_email_date",
+		"rfi_date",
+		"nsf_email_date",
+		"decision_date",
+	}
+	dates := map[string]time.Time{}
+	todayEnd := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, now.Location())
+
+	for _, field := range dateFields {
+		raw := record.GetString(field)
+		if raw == "" {
+			continue
+		}
+		parsed, ok := parseDate(raw)
+		if !ok {
+			continue
+		}
+		dates[field] = parsed
+		if parsed.After(todayEnd) {
+			errs[field] = validation.NewError("future_date", "Date cannot be in the future.")
+		}
+	}
+
+	application, hasApplication := dates["application_date"]
+	biometrics, hasBiometrics := dates["biometrics_date"]
+	if hasApplication && hasBiometrics && biometrics.Before(application) {
+		errs["biometrics_date"] = validation.NewError(
+			"invalid_timeline",
+			"Biometrics cannot be before the application date.",
+		)
+	}
+
+	if hasBiometrics {
+		for _, field := range []string{"eco_email_date", "rfi_date", "nsf_email_date", "decision_date"} {
+			if date, ok := dates[field]; ok && date.Before(biometrics) {
+				errs[field] = validation.NewError(
+					"invalid_timeline",
+					"Milestone cannot be before the biometrics date.",
+				)
+			}
+		}
+	}
+
+	outcome := record.GetString("outcome")
+	_, hasDecision := dates["decision_date"]
+	if outcome == "pending" && hasDecision {
+		errs["decision_date"] = validation.NewError(
+			"pending_with_decision",
+			"Remove the decision date or change the outcome.",
+		)
+	}
+	if (outcome == "approved" || outcome == "rejected") && !hasDecision {
+		errs["decision_date"] = validation.NewError(
+			"decision_required",
+			"A decision date is required for a decided application.",
+		)
+	}
+
+	return errs
+}
+
 type rawApplication struct {
 	Country         string `db:"country"`
 	VisaType        string `db:"visa_type"`
@@ -299,7 +424,7 @@ func workingDaysBetween(from, to time.Time) float64 {
 	}
 
 	count := 0
-	for d := from.AddDate(0, 0, 1); !d.After(to); d = d.AddDate(0, 0, 1) {
+	for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
 		if !isNonWorkingDay(d) {
 			count++
 		}
@@ -365,6 +490,98 @@ func (a *dayAgg) median() float64 {
 	return (sorted[n/2-1] + sorted[n/2]) / 2
 }
 
+func percentile(sorted []float64, p float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if len(sorted) == 1 {
+		return sorted[0]
+	}
+	position := p * float64(len(sorted)-1)
+	lower := int(math.Floor(position))
+	upper := int(math.Ceil(position))
+	if lower == upper {
+		return sorted[lower]
+	}
+	weight := position - float64(lower)
+	return sorted[lower] + (sorted[upper]-sorted[lower])*weight
+}
+
+func buildCohort(
+	app core.App,
+	countryID string,
+	visaType string,
+	priority string,
+	elapsed int,
+) (*cohortResponse, error) {
+	cutoff := time.Now().AddDate(0, -6, 0).Format("2006-01-02")
+	var rows []rawCohortApp
+	err := app.DB().NewQuery(
+		`SELECT a.country_id, c.name as country, a.biometrics_date, a.decision_date
+		 FROM applications a
+		 LEFT JOIN countries c ON c.id = a.country_id
+		 WHERE a.visa_type = {:visaType}
+		   AND a.priority_service = {:priority}
+		   AND a.outcome IN ('approved', 'rejected')
+		   AND a.decision_date >= {:cutoff}
+		   AND a.biometrics_date != ''`,
+	).Bind(dbx.Params{
+		"visaType": visaType,
+		"priority": priority,
+		"cutoff":   cutoff,
+	}).All(&rows)
+	if err != nil {
+		return nil, err
+	}
+
+	countryName := ""
+	exactDays := []float64{}
+	broaderDays := []float64{}
+	for _, row := range rows {
+		days, ok := processingDays(rawApplication{
+			BiometricsDate: row.BiometricsDate,
+			DecisionDate:   row.DecisionDate,
+		})
+		if !ok {
+			continue
+		}
+		broaderDays = append(broaderDays, days)
+		if row.CountryID == countryID {
+			countryName = row.Country
+			exactDays = append(exactDays, days)
+		}
+	}
+
+	scope := "country"
+	selected := exactDays
+	if len(selected) < 5 {
+		scope = "all_countries"
+		selected = broaderDays
+	}
+	sort.Float64s(selected)
+
+	response := &cohortResponse{
+		Count:   len(selected),
+		Scope:   scope,
+		Country: countryName,
+	}
+	if len(selected) == 0 {
+		return response, nil
+	}
+
+	response.LowerQuartile = math.Round(percentile(selected, 0.25)*10) / 10
+	response.MedianDays = math.Round(percentile(selected, 0.5)*10) / 10
+	response.UpperQuartile = math.Round(percentile(selected, 0.75)*10) / 10
+	decided := 0
+	for _, days := range selected {
+		if days <= float64(elapsed) {
+			decided++
+		}
+	}
+	response.DecidedByNow = int(math.Round(float64(decided) / float64(len(selected)) * 100))
+	return response, nil
+}
+
 type decidedEntry struct {
 	VisaType        string
 	PriorityService string
@@ -406,6 +623,7 @@ func groupByWindow(entries []decidedEntry, keyOf func(decidedEntry) string) map[
 func buildStats(app core.App, countryPriority string) (*statsResponse, error) {
 	resp := &statsResponse{
 		Outcomes: map[string]int{},
+		ByMonth:  map[string][]monthStat{},
 	}
 
 	var rows []rawApplication
@@ -419,7 +637,12 @@ func buildStats(app core.App, countryPriority string) (*statsResponse, error) {
 
 	var decidedEntries []decidedEntry
 	byCountry := map[string]*dayAgg{}
-	byMonth := map[string]*dayAgg{}
+	byMonth := map[string]map[string]*dayAgg{
+		"all":            {},
+		"none":           {},
+		"priority":       {},
+		"super_priority": {},
+	}
 
 	filterByCountryPriority := validPriorities[countryPriority]
 
@@ -460,10 +683,12 @@ func buildStats(app core.App, countryPriority string) (*statsResponse, error) {
 		if approved {
 			if decision, ok := parseDate(row.DecisionDate); ok {
 				month := decision.Format("2006-01")
-				if byMonth[month] == nil {
-					byMonth[month] = &dayAgg{}
+				for _, service := range []string{"all", row.PriorityService} {
+					if byMonth[service][month] == nil {
+						byMonth[service][month] = &dayAgg{}
+					}
+					byMonth[service][month].add(days, approved)
 				}
-				byMonth[month].add(days, approved)
 			}
 		}
 	}
@@ -474,10 +699,21 @@ func buildStats(app core.App, countryPriority string) (*statsResponse, error) {
 	for key, agg := range byCountry {
 		resp.ByCountry = append(resp.ByCountry, countryStat{Key: key, Count: agg.count, AvgDays: agg.avg(), Approved: agg.approved})
 	}
-	for month, agg := range byMonth {
-		resp.ByMonth = append(resp.ByMonth, monthStat{
-			Month: month, Count: agg.count, AvgDays: agg.avg(),
-			MinDays: agg.min, MaxDays: agg.max, MedianDays: agg.median(),
+	for service, months := range byMonth {
+		for month, agg := range months {
+			sortedDays := append([]float64{}, agg.days...)
+			sort.Float64s(sortedDays)
+			resp.ByMonth[service] = append(resp.ByMonth[service], monthStat{
+				Month:         month,
+				Count:         agg.count,
+				AvgDays:       agg.avg(),
+				MedianDays:    agg.median(),
+				LowerQuartile: percentile(sortedDays, 0.25),
+				UpperQuartile: percentile(sortedDays, 0.75),
+			})
+		}
+		sort.Slice(resp.ByMonth[service], func(i, j int) bool {
+			return resp.ByMonth[service][i].Month < resp.ByMonth[service][j].Month
 		})
 	}
 
@@ -485,7 +721,5 @@ func buildStats(app core.App, countryPriority string) (*statsResponse, error) {
 	if len(resp.ByCountry) > 50 {
 		resp.ByCountry = resp.ByCountry[:50]
 	}
-	sort.Slice(resp.ByMonth, func(i, j int) bool { return resp.ByMonth[i].Month < resp.ByMonth[j].Month })
-
 	return resp, nil
 }

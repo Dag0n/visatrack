@@ -28,7 +28,6 @@ export function calendarDaysBetween(from, to) {
 export function workingDaysBetween(from, to) {
   let count = 0;
   const cur = new Date(from);
-  cur.setDate(cur.getDate() + 1);
   while (cur <= to) {
     if (!isNonWorkingDay(cur)) count++;
     cur.setDate(cur.getDate() + 1);

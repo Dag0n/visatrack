@@ -67,12 +67,13 @@ function buildChartData(rows, months, priorityFilter) {
 
     for (const r of relevant) {
       countPoint.all += r.count;
-      daySums.all += r.avg_days * r.count;
-      dayCounts.all += r.count;
+      const measured = r.measured_count ?? r.count;
+      daySums.all += r.avg_days * measured;
+      dayCounts.all += measured;
       if (VISA_TYPES.includes(r.visa_type)) {
         countPoint[r.visa_type] += r.count;
-        daySums[r.visa_type] += r.avg_days * r.count;
-        dayCounts[r.visa_type] += r.count;
+        daySums[r.visa_type] += r.avg_days * measured;
+        dayCounts[r.visa_type] += measured;
       }
     }
 
@@ -85,7 +86,7 @@ function buildChartData(rows, months, priorityFilter) {
   });
 }
 
-function Chart({ data, dataKey, hiddenLines, lines, lineLabel, yLabel, allowDecimals = true }) {
+function Chart({ data, hiddenLines, lines, lineLabel, yLabel, allowDecimals = true }) {
   const isEmpty = data.every((d) => lines.every((k) => d[k] == null || d[k] === 0));
   if (isEmpty) return <p className="empty-hint">Not enough data for this selection.</p>;
 
@@ -136,7 +137,10 @@ export default function CountryStats() {
   useEffect(() => {
     const base = pb.baseURL.replace(/\/$/, "");
     fetch(`${base}/api/custom/country-stats?country=${encodeURIComponent(countryName)}`)
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error("Country stats request failed");
+        return res.json();
+      })
       .then((data) => setRows(data.rows ?? []))
       .catch(() => setError("Couldn't load country stats right now."));
   }, [countryName]);

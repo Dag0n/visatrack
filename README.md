@@ -59,7 +59,11 @@ Both are served by the Go backend alongside the standard PocketBase REST API.
 |--------|------|-------------|
 | GET | `/api/custom/stats` | Aggregate stats for the dashboard (outcomes, processing times by visa type / priority / country / month). Accepts `?countryPriority=none\|priority\|super_priority` to filter the country table. |
 | GET | `/api/custom/country-stats` | Per-country 12-month breakdown of decided applications and average processing days, grouped by visa type and priority. Accepts `?country=NAME`. |
+| GET | `/api/custom/cohort` | Recent six-month comparison for a country, visa type, and service level. Returns median and quartile processing times, with an all-country fallback for small samples. |
 | POST | `/api/custom/claim` | Lets an authenticated user adopt unclaimed application entries that match their `reddit_username`. |
+
+Public application responses omit private notes and owner record IDs. Owners still
+receive those fields when viewing or editing their own entries.
 
 ## Project structure
 

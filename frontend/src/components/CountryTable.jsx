@@ -20,7 +20,8 @@ export default function CountryTable({ data, priorityFilter, onPriorityFilterCha
       <h3>Countries and visa waiting times</h3>
       <p className="optional-hint">
         Priority and super priority cases resolve much faster, so they're split out
-        here to avoid skewing standard processing times.
+        here to avoid skewing standard processing times. Approval figures are
+        self-reported and may not represent all outcomes.
       </p>
 
       <div className="filter-row">

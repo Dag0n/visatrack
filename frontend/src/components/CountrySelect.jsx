@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { pb } from "../lib/pb";
 
 let cachedCountries = null;
 
 async function fetchCountries() {
   if (cachedCountries) return cachedCountries;
-  const records = await pb.collection("countries").getFullList({ sort: "name", requestKey: "countries-list" });
+  const records = await pb.collection("countries").getFullList({ sort: "name", requestKey: null });
   cachedCountries = records.map((r) => ({ id: r.id, name: r.name }));
   return cachedCountries;
 }
@@ -13,25 +13,27 @@ async function fetchCountries() {
 export default function CountrySelect({ value, onChange, required }) {
   const [countries, setCountries] = useState([]);
   const [text, setText] = useState("");
-  const didInit = useRef(false);
+  const [touched, setTouched] = useState(false);
 
   useEffect(() => {
-    fetchCountries().then(setCountries);
+    let active = true;
+    fetchCountries()
+      .then((items) => {
+        if (active) setCountries(items);
+      })
+      .catch(() => {
+        if (active) setCountries([]);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
-  // Sync display text when the value (ID) changes externally or countries load.
-  useEffect(() => {
-    if (!value) {
-      if (!didInit.current) return;
-      setText("");
-      return;
-    }
-    const match = countries.find((c) => c.id === value);
-    if (match) setText(match.name);
-  }, [value, countries]);
+  const selectedName = countries.find((country) => country.id === value)?.name ?? "";
+  const displayText = touched ? text : selectedName;
 
   function handleChange(e) {
-    didInit.current = true;
+    setTouched(true);
     const name = e.target.value;
     setText(name);
     const match = countries.find((c) => c.name === name);
@@ -46,7 +48,7 @@ export default function CountrySelect({ value, onChange, required }) {
         autoComplete="off"
         placeholder="Start typing a country…"
         required={required}
-        value={text}
+        value={displayText}
         onChange={handleChange}
       />
       <datalist id="country-options">

@@ -1,16 +1,42 @@
+import { useState } from "react";
+
 function round1(n) {
   return Math.round(n * 10) / 10;
 }
 
 export default function MonthlyTable({ data }) {
+  const [service, setService] = useState("none");
+  const legacyData = Array.isArray(data);
+  const rows = legacyData ? data : data[service] ?? [];
+  const services = [
+    { value: "none", label: "Standard" },
+    { value: "priority", label: "Priority" },
+    { value: "super_priority", label: "Super priority" },
+    { value: "all", label: "All combined" },
+  ];
+
   return (
     <div className="chart-card">
-      <h3>Approval times by month</h3>
+      <h3>Typical approval times by month</h3>
       <p className="optional-hint">
-        Based on decision month, anchored to the first working day after
-        biometrics (UK bank holidays excluded).
+        Median and middle-half range by decision month. Working days start after
+        biometrics and exclude UK bank holidays.
       </p>
-      {data.length === 0 ? (
+      {!legacyData && (
+        <div className="filter-row">
+          {services.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={service === option.value ? "filter-button active" : "filter-button"}
+              onClick={() => setService(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {rows.length === 0 ? (
         <p className="empty-hint">Not enough approved applications yet.</p>
       ) : (
         <div className="table-scroll">
@@ -21,19 +47,21 @@ export default function MonthlyTable({ data }) {
               <th>Approved</th>
               <th>Mean</th>
               <th>Median</th>
-              <th>Fastest</th>
-              <th>Longest</th>
+              <th>Middle 50%</th>
             </tr>
           </thead>
           <tbody>
-            {data.map((row) => (
+            {rows.map((row) => (
               <tr key={row.month}>
                 <td>{row.month}</td>
                 <td>{row.count}</td>
                 <td>{round1(row.avgDays)}d</td>
                 <td>{round1(row.medianDays)}d</td>
-                <td>{round1(row.minDays)}d</td>
-                <td>{round1(row.maxDays)}d</td>
+                <td>
+                  {row.lowerQuartile == null
+                    ? "—"
+                    : `${round1(row.lowerQuartile)}–${round1(row.upperQuartile)}d`}
+                </td>
               </tr>
             ))}
           </tbody>

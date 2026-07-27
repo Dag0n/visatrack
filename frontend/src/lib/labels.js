@@ -7,7 +7,7 @@ export const VISA_TYPE_LABELS = {
 };
 
 export const PRIORITY_LABELS = {
-  none: "None",
+  none: "Standard",
   priority: "Priority",
   super_priority: "Super priority",
 };

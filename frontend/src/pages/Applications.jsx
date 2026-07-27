@@ -86,10 +86,6 @@ export default function Applications() {
   }, [filter, visaType, country]);
 
   useEffect(() => {
-    setPage(1);
-  }, [pbFilter, sort]);
-
-  useEffect(() => {
     pb.collection("applications")
       .getList(page, PER_PAGE, {
         filter: pbFilter,
@@ -153,58 +149,85 @@ export default function Applications() {
   }, [isLoggedIn, ownItems]);
 
   return (
-    <div>
-      <h2>Applications</h2>
-      <p className="optional-hint">
-        Day 1 of processing time is the first working day after the biometrics
-        appointment. Entries without a biometrics date yet show no processing time.
-        ECO email / RFI / NSF email columns show days elapsed since biometrics.
-      </p>
-
-      <div className="filter-row">
-        {FILTERS.map((f) => (
-          <button
-            key={f.value}
-            type="button"
-            className={filter === f.value ? "filter-button active" : "filter-button"}
-            onClick={() => setFilter(f.value)}
-          >
-            {f.label}
-          </button>
-        ))}
+    <div className="applications-page">
+      <div className="page-heading">
+        <div>
+          <span className="eyebrow plain">Timeline explorer</span>
+          <h1>Community applications</h1>
+          <p>
+            Find people on a similar route and see each milestone in context.
+            Processing starts on the first working day after biometrics.
+          </p>
+        </div>
       </div>
 
-      <div className="filter-row">
-        <input
-          type="text"
-          className="table-search"
-          placeholder="Search country…"
-          value={country}
-          onChange={(e) => setCountry(e.target.value)}
-        />
-        <select value={visaType} onChange={(e) => setVisaType(e.target.value)}>
-          {VISA_TYPE_FILTERS.map((f) => (
-            <option key={f.value} value={f.value}>
+      <div className="explorer-panel">
+        <div className="filter-row status-filters">
+          {FILTERS.map((f) => (
+            <button
+              key={f.value}
+              type="button"
+              className={filter === f.value ? "filter-button active" : "filter-button"}
+              onClick={() => {
+                setFilter(f.value);
+                setPage(1);
+              }}
+            >
               {f.label}
-            </option>
+            </button>
           ))}
-        </select>
-        <select value={sort} onChange={(e) => setSort(e.target.value)}>
-          {SORT_OPTIONS.map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-      </div>
+        </div>
 
-      {summary && summary.measured > 0 && (
-        <p className="optional-hint">
-          Avg processing for these results: {round1(summary.avgWD)} WD (median{" "}
-          {round1(summary.medianWD)} WD) across {summary.measured} of {summary.total}{" "}
-          matching entries with biometrics recorded.
-        </p>
-      )}
+        <div className="filter-row explorer-controls">
+          <input
+            type="text"
+            className="table-search"
+            placeholder="Search by country…"
+            value={country}
+            onChange={(e) => {
+              setCountry(e.target.value);
+              setPage(1);
+            }}
+          />
+          <select
+            aria-label="Visa type"
+            value={visaType}
+            onChange={(e) => {
+              setVisaType(e.target.value);
+              setPage(1);
+            }}
+          >
+            {VISA_TYPE_FILTERS.map((f) => (
+              <option key={f.value} value={f.value}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Sort applications"
+            value={sort}
+            onChange={(e) => {
+              setSort(e.target.value);
+              setPage(1);
+            }}
+          >
+            {SORT_OPTIONS.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {summary && (
+          <div className="result-summary">
+            <div><strong>{summary.total}</strong><span>Matching timelines</span></div>
+            <div><strong>{summary.measured > 0 ? `${round1(summary.medianWD)} WD` : "—"}</strong><span>Median duration</span></div>
+            <div><strong>{summary.measured > 0 ? `${round1(summary.avgWD)} WD` : "—"}</strong><span>Average duration</span></div>
+            <p>{summary.measured} entries have enough dates to measure.</p>
+          </div>
+        )}
+      </div>
 
       {ownCombos.size > 0 && (
         <p className="optional-hint">

@@ -28,7 +28,9 @@ export default function App() {
     <div className="app-shell">
       <header className="app-header">
         <div className="app-header-inner">
-          <img src={logo} alt="VisaTrack UK" className="app-logo" />
+          <NavLink to="/" className="logo-link" onClick={closeMenu} aria-label="VisaTrack UK home">
+            <img src={logo} alt="VisaTrack UK" className="app-logo" />
+          </NavLink>
           <button
             type="button"
             className="nav-toggle"
@@ -44,9 +46,15 @@ export default function App() {
             <NavLink to="/" onClick={closeMenu}>Dashboard</NavLink>
             <NavLink to="/applications" onClick={closeMenu}>Applications</NavLink>
             <NavLink to="/countries" onClick={closeMenu}>Countries</NavLink>
-            <NavLink to="/my-application" onClick={closeMenu}>My applications</NavLink>
             {isLoggedIn ? (
               <>
+                <NavLink
+                  to="/my-application"
+                  className={({ isActive }) => `nav-cta${isActive ? " active" : ""}`}
+                  onClick={closeMenu}
+                >
+                  My timeline
+                </NavLink>
                 <NavLink to="/settings" onClick={closeMenu}>Settings</NavLink>
                 <button
                   type="button"
@@ -94,14 +102,20 @@ export default function App() {
 
       <footer className="app-footer">
         <div className="app-footer-inner">
-          <span>VisaTrack UK is an independent, unofficial community project.</span>
-          <a
-            href="https://www.reddit.com/r/SpouseVisaUk"
-            target="_blank"
-            rel="noreferrer"
-          >
-            r/SpouseVisaUk
-          </a>
+          <div>
+            <strong>VisaTrack UK</strong>
+            <span>Independent community data—not immigration advice.</span>
+          </div>
+          <div className="footer-links">
+            <NavLink to="/countries">Country data</NavLink>
+            <a
+              href="https://www.reddit.com/r/SpouseVisaUk"
+              target="_blank"
+              rel="noreferrer"
+            >
+              r/SpouseVisaUk
+            </a>
+          </div>
         </div>
       </footer>
     </div>

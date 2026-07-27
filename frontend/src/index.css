@@ -1,12 +1,16 @@
 :root {
-  --color-primary: #082b6f;
-  --color-primary-dark: #031b46;
-  --color-accent: #e9282b;
-  --color-soft-blue: #6f8fd7;
-  --color-bg: #fafbff;
-  --color-panel: #eef4ff;
-  --color-border: #d8e0f0;
-  --color-text: #334155;
+  --color-primary: #123c69;
+  --color-primary-dark: #082341;
+  --color-accent: #ed4c5c;
+  --color-soft-blue: #6f91ca;
+  --color-bg: #f7f9fc;
+  --color-panel: #eef4fb;
+  --color-border: #dfe6ef;
+  --color-text: #24364b;
+  --color-heading: #102f50;
+  --color-muted: #66768a;
+  --shadow-sm: 0 6px 24px rgba(22, 50, 79, 0.07);
+  --shadow-md: 0 18px 55px rgba(22, 50, 79, 0.12);
 
   --color-status-pending: #f59e0b;
   --color-status-approved: #16a34a;
@@ -14,7 +18,7 @@
   --color-status-waiting: #64748b;
   --color-status-priority: #e9282b;
 
-  font: 16px/1.5 system-ui, "Segoe UI", Roboto, sans-serif;
+  font: 16px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   color-scheme: light;
   color: var(--color-text);
   background: var(--color-bg);
@@ -22,11 +26,27 @@
 
 body {
   margin: 0;
+  min-width: 320px;
+  background:
+    radial-gradient(circle at 15% 0%, rgba(132, 176, 225, 0.12), transparent 28rem),
+    var(--color-bg);
 }
 
 h1,
 h2,
 h3 {
   margin: 0;
+  color: var(--color-heading);
+  letter-spacing: -0.025em;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+a {
   color: var(--color-primary);
 }

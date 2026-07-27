@@ -27,10 +27,14 @@ export default function GroupBarChart({ title, data, labels = {} }) {
     key: labels[row.key] ?? row.key,
     avgDays: Math.round(row.avgDays * 10) / 10,
   }));
+  const sampleSize = rows.reduce((total, row) => total + row.count, 0);
 
   return (
     <div className="chart-card">
       <h3>{title}</h3>
+      <p className="chart-meta">
+        {sampleSize} measurable decision{sampleSize === 1 ? "" : "s"} · UK working days
+      </p>
       {windowed && (
         <div className="filter-row">
           {WINDOW_OPTIONS.map((option) => (

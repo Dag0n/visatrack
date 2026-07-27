@@ -10,7 +10,10 @@ export default function Countries() {
   useEffect(() => {
     const base = pb.baseURL.replace(/\/$/, "");
     fetch(`${base}/api/custom/stats?countryPriority=${countryPriority}`)
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error("Countries request failed");
+        return res.json();
+      })
       .then(setStats)
       .catch(() => setError("Couldn't load countries right now."));
   }, [countryPriority]);
@@ -19,8 +22,17 @@ export default function Countries() {
   if (!stats) return <p className="empty-hint">Loading…</p>;
 
   return (
-    <div>
-      <h2>Countries</h2>
+    <div className="countries-page">
+      <div className="page-heading">
+        <div>
+          <span className="eyebrow plain">Country explorer</span>
+          <h1>Waiting times around the world</h1>
+          <p>
+            Compare recent partner visa decisions by the applicant's country and
+            service level. Small samples should be treated as directional.
+          </p>
+        </div>
+      </div>
       <CountryTable
         data={stats.byCountry ?? []}
         priorityFilter={countryPriority}
