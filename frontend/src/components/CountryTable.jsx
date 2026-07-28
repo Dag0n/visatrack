@@ -8,6 +8,12 @@ const PRIORITY_FILTERS = [
   { value: "all", label: "All combined" },
 ];
 
+function formatApprovalRate(approved, decided) {
+  if (!decided) return "—";
+  const rate = (approved / decided) * 100;
+  return `${rate === 100 ? "100" : rate.toFixed(1)}%`;
+}
+
 export default function CountryTable({ data, priorityFilter, onPriorityFilterChange }) {
   const [search, setSearch] = useState("");
 
@@ -54,7 +60,7 @@ export default function CountryTable({ data, priorityFilter, onPriorityFilterCha
               <th>Country</th>
               <th>Decided</th>
               <th>Avg. days</th>
-              <th>Approval rate</th>
+              <th>Reported approved</th>
             </tr>
           </thead>
           <tbody>
@@ -65,7 +71,7 @@ export default function CountryTable({ data, priorityFilter, onPriorityFilterCha
                   </td>
                 <td>{row.count}</td>
                 <td>{Math.round(row.avgDays * 10) / 10}</td>
-                <td>{Math.round((row.approved / row.count) * 100)}%</td>
+                <td>{formatApprovalRate(row.approved, row.count)}</td>
               </tr>
             ))}
           </tbody>

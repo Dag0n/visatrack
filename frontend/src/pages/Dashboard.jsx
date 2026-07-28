@@ -37,58 +37,35 @@ export default function Dashboard() {
   const rejected = outcomes.rejected ?? 0;
   const pending = outcomes.pending ?? 0;
   const decided = approved + rejected;
-  const approvalRate = decided > 0 ? Math.round((approved / decided) * 100) : null;
-  const recentMonth = stats.byMonth?.none?.at(-1) ?? stats.byMonth?.all?.at(-1);
-
+  const approvalRate = decided > 0 ? (approved / decided) * 100 : null;
+  const formattedApprovalRate =
+    approvalRate === null
+      ? "—"
+      : `${approvalRate === 100 ? "100" : approvalRate.toFixed(1)}%`;
   return (
     <div className="dashboard-page">
       <section className="hero">
         <div className="hero-copy">
           <span className="eyebrow">
             <span className="live-dot" />
-            Community-powered UK partner visa data
+            Built with the r/SpouseVisaUk community
           </span>
-          <h1>Less guessing.<br />More clarity while you wait.</h1>
+          <h1>Real visa timelines, shared by applicants.</h1>
           <p>
-            Explore real application timelines, compare people on a similar route,
-            and understand where your wait sits in the community.
+            See how long UK spouse and partner visa applications are taking,
+            compare similar routes, and share your own milestones as they happen.
           </p>
           <div className="hero-actions">
-            <Link className="button primary-button" to={isLoggedIn ? "/my-application" : "/login"}>
-              {isLoggedIn ? "View my timeline" : "Add your timeline"}
+            <Link className="button primary-button" to="/applications">
+              Browse timelines
             </Link>
-            <Link className="button secondary-button" to="/applications">
-              Explore applications
+            <Link className="button secondary-button" to={isLoggedIn ? "/my-application" : "/login"}>
+              {isLoggedIn ? "View my timeline" : "Share my timeline"}
             </Link>
           </div>
-          <span className="hero-footnote">Unofficial, anonymous and free to use.</span>
-        </div>
-        <div className="hero-visual" aria-hidden="true">
-          <div className="route-card route-card-main">
-            <span className="route-label">A typical journey</span>
-            <div className="route-line">
-              <span className="route-stop complete">✓</span>
-              <span className="route-segment complete" />
-              <span className="route-stop complete">✓</span>
-              <span className="route-segment active" />
-              <span className="route-stop active" />
-              <span className="route-segment" />
-              <span className="route-stop" />
-            </div>
-            <div className="route-names">
-              <span>Applied</span>
-              <span>Biometrics</span>
-              <span>With UKVI</span>
-              <span>Decision</span>
-            </div>
-          </div>
-          <div className="floating-stat">
-            <span className="floating-icon">⌁</span>
-            <div>
-              <strong>{recentMonth ? `${Math.round(recentMonth.medianDays)} days` : "Live data"}</strong>
-              <span>{recentMonth ? "Recent median" : "Updated by applicants"}</span>
-            </div>
-          </div>
+          <span className="hero-footnote">
+            Independent and unofficial · Community-reported data · Not immigration advice
+          </span>
         </div>
       </section>
 
@@ -119,10 +96,12 @@ export default function Dashboard() {
           <span className="summary-icon green">✓</span>
           <div>
             <span className="summary-value">
-              {approvalRate === null ? "—" : `${approvalRate}%`}
+              {formattedApprovalRate}
             </span>
-            <span className="summary-label">Reported approvals</span>
-            <span className="summary-meta">{decided} decisions shared</span>
+            <span className="summary-label">Self-reported approval share</span>
+            <span className="summary-meta">
+              {approved} approved · {rejected} rejected
+            </span>
           </div>
         </div>
       </div>
