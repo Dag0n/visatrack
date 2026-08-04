@@ -50,6 +50,13 @@ export function AuthProvider({ children }) {
     return pb.send("/api/custom/claim", { method: "POST" });
   }
 
+  async function previewClaim(username) {
+    return pb.send("/api/custom/claim/preview", {
+      method: "GET",
+      query: { username },
+    });
+  }
+
   const value = {
     user,
     isLoggedIn: !!user && pb.authStore.isValid,
@@ -60,6 +67,7 @@ export function AuthProvider({ children }) {
     updateProfile,
     deleteAccount,
     claimEntries,
+    previewClaim,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

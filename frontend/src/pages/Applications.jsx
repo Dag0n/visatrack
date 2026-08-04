@@ -20,9 +20,31 @@ const VISA_TYPE_FILTERS = [
   ...Object.entries(VISA_TYPE_LABELS).map(([value, label]) => ({ value, label })),
 ];
 
+const PRIORITY_FILTERS = [
+  { value: "all", label: "All services" },
+  ...Object.entries(PRIORITY_LABELS).map(([value, label]) => ({ value, label })),
+];
+
+const MILESTONE_FILTERS = [
+  { value: "all", label: "Any milestones" },
+  { value: "eco", label: "Has ECO email" },
+  { value: "rfi", label: "Has RFI" },
+  { value: "nsf", label: "Has NSF email" },
+  { value: "none", label: "No milestone emails" },
+];
+
+const MILESTONE_CLAUSES = {
+  eco: 'eco_email_date != ""',
+  rfi: 'rfi_date != ""',
+  nsf: 'nsf_email_date != ""',
+  none: 'eco_email_date = "" && rfi_date = "" && nsf_email_date = ""',
+};
+
 const SORT_OPTIONS = [
   { value: "-application_date", label: "Newest applied first" },
   { value: "application_date", label: "Oldest applied first" },
+  { value: "-biometrics_date", label: "Newest biometrics first" },
+  { value: "biometrics_date", label: "Oldest biometrics first" },
   { value: "-decision_date", label: "Newest decision first" },
   { value: "decision_date", label: "Oldest decision first" },
 ];
@@ -69,7 +91,11 @@ export default function Applications() {
   const { user, isLoggedIn } = useAuth();
   const [filter, setFilter] = useState("pending");
   const [visaType, setVisaType] = useState("all");
+  const [priority, setPriority] = useState("all");
+  const [milestone, setMilestone] = useState("all");
   const [country, setCountry] = useState("");
+  const [bioFrom, setBioFrom] = useState("");
+  const [bioTo, setBioTo] = useState("");
   const [sort, setSort] = useState("-application_date");
   const [page, setPage] = useState(1);
   const [result, setResult] = useState(null);
@@ -77,13 +103,28 @@ export default function Applications() {
   const [summary, setSummary] = useState(null);
   const [ownItems, setOwnItems] = useState([]);
 
+  const hasExtraFilters =
+    priority !== "all" || milestone !== "all" || bioFrom !== "" || bioTo !== "";
+
   const pbFilter = useMemo(() => {
     const clauses = [];
     if (filter !== "all") clauses.push(pb.filter("outcome = {:outcome}", { outcome: filter }));
     if (visaType !== "all") clauses.push(pb.filter("visa_type = {:visaType}", { visaType }));
+    if (priority !== "all") clauses.push(pb.filter("priority_service = {:priority}", { priority }));
+    if (milestone !== "all") clauses.push(MILESTONE_CLAUSES[milestone]);
     if (country.trim()) clauses.push(pb.filter("country_id.name ~ {:country}", { country: country.trim() }));
+    if (bioFrom) clauses.push(pb.filter("biometrics_date >= {:from}", { from: `${bioFrom} 00:00:00.000Z` }));
+    if (bioTo) clauses.push(pb.filter("biometrics_date <= {:to}", { to: `${bioTo} 23:59:59.999Z` }));
     return clauses.join(" && ");
-  }, [filter, visaType, country]);
+  }, [filter, visaType, priority, milestone, country, bioFrom, bioTo]);
+
+  function clearExtraFilters() {
+    setPriority("all");
+    setMilestone("all");
+    setBioFrom("");
+    setBioTo("");
+    setPage(1);
+  }
 
   useEffect(() => {
     pb.collection("applications")
@@ -217,6 +258,64 @@ export default function Applications() {
               </option>
             ))}
           </select>
+        </div>
+
+        <div className="filter-row explorer-controls">
+          <select
+            aria-label="Priority service"
+            value={priority}
+            onChange={(e) => {
+              setPriority(e.target.value);
+              setPage(1);
+            }}
+          >
+            {PRIORITY_FILTERS.map((f) => (
+              <option key={f.value} value={f.value}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Milestone emails"
+            value={milestone}
+            onChange={(e) => {
+              setMilestone(e.target.value);
+              setPage(1);
+            }}
+          >
+            {MILESTONE_FILTERS.map((f) => (
+              <option key={f.value} value={f.value}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+          <label className="date-field">
+            <span>Biometrics from</span>
+            <input
+              type="date"
+              value={bioFrom}
+              onChange={(e) => {
+                setBioFrom(e.target.value);
+                setPage(1);
+              }}
+            />
+          </label>
+          <label className="date-field">
+            <span>to</span>
+            <input
+              type="date"
+              value={bioTo}
+              onChange={(e) => {
+                setBioTo(e.target.value);
+                setPage(1);
+              }}
+            />
+          </label>
+          {hasExtraFilters && (
+            <button type="button" className="clear-filters" onClick={clearExtraFilters}>
+              Clear
+            </button>
+          )}
         </div>
 
         {summary && (

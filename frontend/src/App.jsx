@@ -8,6 +8,7 @@ import Applications from "./pages/Applications";
 import Settings from "./pages/Settings";
 import CountryStats from "./pages/CountryStats";
 import Countries from "./pages/Countries";
+import PartnerVisaStats from "./pages/PartnerVisaStats";
 import logo from "./assets/logo.png";
 import "./App.css";
 
@@ -46,6 +47,7 @@ export default function App() {
             <NavLink to="/" onClick={closeMenu}>Dashboard</NavLink>
             <NavLink to="/applications" onClick={closeMenu}>Applications</NavLink>
             <NavLink to="/countries" onClick={closeMenu}>Countries</NavLink>
+            <NavLink to="/approval-rates" onClick={closeMenu}>Approval rates</NavLink>
             {isLoggedIn ? (
               <>
                 <NavLink
@@ -89,6 +91,7 @@ export default function App() {
           />
           <Route path="/countries" element={<Countries />} />
           <Route path="/country/:country" element={<CountryStats />} />
+          <Route path="/approval-rates" element={<PartnerVisaStats />} />
           <Route
             path="/settings"
             element={

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { pb } from "../lib/pb";
 import { useAuth } from "../lib/auth.jsx";
 import CountrySelect from "../components/CountrySelect";
+import { stripRedditPrefix } from "../lib/format";
 import { PRIORITY_LABELS, VISA_TYPE_LABELS } from "../lib/labels";
 import { processingStartDate, workingDaysBetween } from "../lib/processingDays";
 import StatusBadge from "../components/StatusBadge";
@@ -201,6 +201,135 @@ function CohortInsight({ application }) {
   );
 }
 
+function ClaimCallout({ hasApplications, onClaimed }) {
+  const { user, updateProfile, claimEntries, previewClaim } = useAuth();
+  const [username, setUsername] = useState(user.reddit_username || "");
+  const [matches, setMatches] = useState(null);
+  const [checkedName, setCheckedName] = useState("");
+  const [stage, setStage] = useState("idle");
+  const [claimed, setClaimed] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+
+  const check = useCallback(
+    async (name) => {
+      const cleaned = stripRedditPrefix(name).trim();
+      if (!cleaned) return;
+      setStage("checking");
+      try {
+        const res = await previewClaim(cleaned);
+        setMatches(res.matches);
+        setCheckedName(cleaned);
+        setStage("checked");
+      } catch {
+        setStage("error");
+      }
+    },
+    [previewClaim],
+  );
+
+  useEffect(() => {
+    if (!user.reddit_username) return;
+    // Run the automatic lookup once, on first render, deferred so the
+    // initial render commits before any state updates.
+    const savedUsername = user.reddit_username;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) check(savedUsername);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleClaim() {
+    setStage("claiming");
+    try {
+      if (stripRedditPrefix(username).trim() !== (user.reddit_username || "")) {
+        await updateProfile({ reddit_username: checkedName });
+      }
+      const res = await claimEntries();
+      setClaimed(res.claimed);
+      setStage("claimed");
+      onClaimed();
+    } catch {
+      setStage("error");
+    }
+  }
+
+  if (dismissed) return null;
+  // With applications already on the account, only speak up when there is
+  // genuinely something to claim.
+  if (hasApplications && !(stage === "checked" && matches > 0) && stage !== "claimed") {
+    return null;
+  }
+
+  if (stage === "claimed") {
+    return (
+      <div className="claim-callout success">
+        <strong>
+          Linked {claimed} timeline{claimed === 1 ? "" : "s"} to your account.
+        </strong>
+        <p>It's yours to keep updated now — new milestones improve everyone's stats.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="claim-callout">
+      <div className="claim-callout-text">
+        <strong>Posted on r/SpouseVisaUk already?</strong>
+        <p>
+          We import timelines from the subreddit, so yours may already be here.
+          Enter your Reddit username to find and claim it.
+        </p>
+      </div>
+      <form
+        className="claim-callout-controls"
+        onSubmit={(e) => {
+          e.preventDefault();
+          check(username);
+        }}
+      >
+        <input
+          type="text"
+          placeholder="Reddit username (no u/ needed)"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+        />
+        <button type="submit" disabled={stage === "checking" || !username.trim()}>
+          {stage === "checking" ? "Checking…" : "Find my timeline"}
+        </button>
+      </form>
+      {stage === "checked" && matches > 0 && (
+        <div className="claim-callout-result">
+          <span>
+            Found <strong>{matches}</strong> unclaimed timeline{matches === 1 ? "" : "s"} for
+            u/{checkedName}.
+          </span>
+          <button type="button" className="primary-button button" onClick={handleClaim}>
+            Claim {matches === 1 ? "it" : "them"}
+          </button>
+        </div>
+      )}
+      {stage === "checked" && matches === 0 && (
+        <p className="optional-hint">
+          Nothing imported for u/{checkedName} yet — add your timeline below instead.
+        </p>
+      )}
+      {stage === "claiming" && <p className="optional-hint">Linking your entries…</p>}
+      {stage === "error" && (
+        <p className="error-text">Couldn't check right now. You can also claim later from Settings.</p>
+      )}
+      {!hasApplications && (
+        <button type="button" className="link-button claim-dismiss" onClick={() => setDismissed(true)}>
+          I haven't posted there
+        </button>
+      )}
+    </div>
+  );
+}
+
 function ApplicationCard({ application, onEdit, onDelete }) {
   const milestones = [
     { label: "Applied", date: application.application_date },
@@ -375,10 +504,7 @@ export default function MyApplication() {
         <div>
           <span className="eyebrow plain">Your visa journey</span>
           <h1>My applications</h1>
-          <p>
-            Keep milestones current to see how your wait compares. Set your Reddit
-            username in <Link to="/settings">Settings</Link> to link existing entries.
-          </p>
+          <p>Keep milestones current to see how your wait compares.</p>
         </div>
         {!showForm && (
           <button type="button" className="primary-button button" onClick={startNew}>
@@ -386,6 +512,12 @@ export default function MyApplication() {
           </button>
         )}
       </div>
+
+      <ClaimCallout
+        key={user.id}
+        hasApplications={applications.length > 0}
+        onClaimed={loadApplications}
+      />
 
       {applications.length > 0 && (
         <div className="application-card-list">

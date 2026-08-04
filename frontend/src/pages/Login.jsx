@@ -87,6 +87,12 @@ export default function Login() {
             ? "Sign in to update milestones and see your cohort comparison."
             : "Save your timeline and see how your wait compares with similar applications."}
         </p>
+        {mode === "signup" && (
+          <p className="auth-claim-hint">
+            Already posted your timeline on r/SpouseVisaUk? We may have imported
+            it — after signing up you can claim it with your Reddit username.
+          </p>
+        )}
       </div>
 
       <div className="oauth2-buttons">

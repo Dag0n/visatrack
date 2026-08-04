@@ -71,6 +71,22 @@ type rawCountryApp struct {
 	DecisionDate    string `db:"decision_date"`
 }
 
+type partnerVisaStatRow struct {
+	Country   string `json:"country" db:"country"`
+	Year      int    `json:"year" db:"year"`
+	Issued    int    `json:"issued" db:"issued"`
+	Refused   int    `json:"refused" db:"refused"`
+	Withdrawn int    `json:"withdrawn" db:"withdrawn"`
+	Lapsed    int    `json:"lapsed" db:"lapsed"`
+}
+
+type partnerVisaStatsResponse struct {
+	Source    string               `json:"source"`
+	SourceURL string               `json:"sourceUrl"`
+	Note      string               `json:"note"`
+	Rows      []partnerVisaStatRow `json:"rows"`
+}
+
 type cohortResponse struct {
 	Count         int     `json:"count"`
 	MedianDays    float64 `json:"medianDays"`
@@ -229,6 +245,26 @@ func main() {
 			return e.JSON(http.StatusOK, countryStatsResponse{Country: country, Rows: rows})
 		})
 
+		se.Router.GET("/api/custom/partner-visa-stats", func(e *core.RequestEvent) error {
+			rows := []partnerVisaStatRow{}
+			err := e.App.DB().NewQuery(
+				`SELECT c.name AS country, s.year, s.issued, s.refused, s.withdrawn, s.lapsed
+					 FROM partner_visa_stats s
+					 JOIN countries c ON c.id = s.country
+					 ORDER BY c.name, s.year`,
+			).All(&rows)
+			if err != nil {
+				return e.InternalServerError("failed to query partner visa stats", err)
+			}
+
+			return e.JSON(http.StatusOK, partnerVisaStatsResponse{
+				Source:    "Home Office, Immigration system statistics — entry clearance visa applications and outcomes detailed dataset, year ending March 2026",
+				SourceURL: "https://www.gov.uk/government/statistical-data-sets/immigration-system-statistics-data-tables",
+				Note:      "2026 covers Q1 only (year ending March 2026 release)",
+				Rows:      rows,
+			})
+		})
+
 		se.Router.GET("/api/custom/cohort", func(e *core.RequestEvent) error {
 			countryID := strings.TrimSpace(e.Request.URL.Query().Get("country"))
 			visaType := strings.TrimSpace(e.Request.URL.Query().Get("visaType"))
@@ -248,6 +284,40 @@ func main() {
 			return e.JSON(http.StatusOK, stats)
 		})
 
+		findClaimable := func(e *core.RequestEvent, username string) ([]*core.Record, error) {
+			records := []*core.Record{}
+			err := e.App.RecordQuery("applications").
+				AndWhere(dbx.NewExp(
+					"LOWER(reddit_username) = LOWER({:username})",
+					dbx.Params{"username": username},
+				)).
+				AndWhere(dbx.NewExp("(user = '' OR user IS NULL)")).
+				All(&records)
+			return records, err
+		}
+
+		// Lets a logged-in user check whether the Reddit import already holds
+		// their timeline before committing the username to their profile.
+		se.Router.GET("/api/custom/claim/preview", func(e *core.RequestEvent) error {
+			if e.Auth == nil {
+				return e.UnauthorizedError("authentication required", nil)
+			}
+
+			username := strings.TrimSpace(e.Request.URL.Query().Get("username"))
+			if username == "" {
+				username = strings.TrimSpace(e.Auth.GetString("reddit_username"))
+			}
+			if username == "" {
+				return e.BadRequestError("provide a reddit username", nil)
+			}
+
+			records, err := findClaimable(e, username)
+			if err != nil {
+				return e.InternalServerError("failed to search for claimable entries", err)
+			}
+			return e.JSON(http.StatusOK, map[string]int{"matches": len(records)})
+		})
+
 		se.Router.POST("/api/custom/claim", func(e *core.RequestEvent) error {
 			if e.Auth == nil {
 				return e.UnauthorizedError("authentication required", nil)
@@ -258,14 +328,7 @@ func main() {
 				return e.BadRequestError("set a reddit username on your profile first", nil)
 			}
 
-			records, err := e.App.FindRecordsByFilter(
-				"applications",
-				"reddit_username = {:username} && user = ''",
-				"",
-				0,
-				0,
-				dbx.Params{"username": redditUsername},
-			)
+			records, err := findClaimable(e, redditUsername)
 			if err != nil {
 				return e.InternalServerError("failed to search for claimable entries", err)
 			}

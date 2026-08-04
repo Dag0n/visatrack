@@ -1436,6 +1436,116 @@
   background: #f9fbfd;
 }
 
+/* Claim imported-timeline callout */
+.claim-callout {
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid #cfe3f7;
+  border-radius: 16px;
+  background: #f1f6fb;
+}
+
+.claim-callout.success {
+  border-color: #bfe3c8;
+  background: #f0faf2;
+}
+
+.claim-callout strong {
+  color: var(--color-heading);
+}
+
+.claim-callout p {
+  margin: 4px 0 0;
+  color: var(--color-muted);
+  font-size: 14px;
+}
+
+.claim-callout-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.claim-callout-controls input {
+  flex: 1;
+  min-width: 220px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 14px;
+  background: #fff;
+}
+
+.claim-callout-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.claim-dismiss {
+  margin-top: 10px;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.auth-claim-hint {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: var(--color-muted);
+  font-size: 13px;
+  background: #f1f6fb;
+}
+
+.explorer-controls .date-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.explorer-controls .date-field span {
+  color: var(--color-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.explorer-controls .date-field input {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 14px;
+  background: #f9fbfd;
+}
+
+.explorer-controls .clear-filters {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 14px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.explorer-controls .clear-filters:hover {
+  color: var(--color-text);
+  background: #f1f6fb;
+}
+
 .result-summary {
   padding: 14px 16px;
   border-radius: 12px;
