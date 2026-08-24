@@ -38,7 +38,9 @@ export function AuthProvider({ children }) {
   }
 
   async function updateProfile(data) {
-    await pb.collection("users").update(user.id, data);
+    const updated = await pb.collection("users").update(user.id, data);
+    pb.authStore.save(pb.authStore.token, updated);
+    return updated;
   }
 
   async function deleteAccount() {

@@ -1,5 +1,5 @@
-import { lazy, Suspense, useState } from "react";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { Component, lazy, Suspense, useState } from "react";
+import { Navigate, NavLink, Outlet, useLocation, useParams } from "react-router-dom";
 import { useAuth } from "./lib/auth.jsx";
 import logo from "./assets/logo-header.webp";
 import "./App.css";
@@ -15,12 +15,82 @@ const PartnerVisaStats = lazy(() => import("./pages/PartnerVisaStats"));
 
 function ProtectedRoute({ children }) {
   const { isLoggedIn } = useAuth();
-  return isLoggedIn ? children : <Login />;
+  const location = useLocation();
+  return isLoggedIn ? children : <Navigate to="/login" state={{ from: location }} replace />;
 }
+
+class RouteErrorBoundary extends Component {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className="empty-state compact-error-state" role="alert">
+          <h2>This page couldn't load</h2>
+          <p>The connection may have dropped, or a newer version of the site may be available.</p>
+          <button type="button" onClick={() => window.location.reload()}>
+            Reload page
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function CountryStatsRoute() {
+  const { country } = useParams();
+  return <CountryStats key={country} />;
+}
+
+// Route objects live beside the lazy page declarations they use.
+// eslint-disable-next-line react-refresh/only-export-components
+export const appRoutes = [
+  { index: true, element: <Dashboard /> },
+  { path: "applications", element: <Applications /> },
+  { path: "login", element: <Login /> },
+  {
+    path: "my-application",
+    element: (
+      <ProtectedRoute>
+        <MyApplication />
+      </ProtectedRoute>
+    ),
+  },
+  { path: "countries", element: <Countries /> },
+  { path: "country/:country", element: <CountryStatsRoute /> },
+  { path: "approval-rates", element: <PartnerVisaStats /> },
+  {
+    path: "settings",
+    element: (
+      <ProtectedRoute>
+        <Settings />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: "*",
+    element: (
+      <div className="page-heading">
+        <div>
+          <h1>Page not found</h1>
+          <p>
+            That page doesn't exist. <NavLink to="/">Back to the dashboard</NavLink>.
+          </p>
+        </div>
+      </div>
+    ),
+  },
+];
 
 export default function App() {
   const { isLoggedIn, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const location = useLocation();
 
   function closeMenu() {
     setMenuOpen(false);
@@ -78,45 +148,11 @@ export default function App() {
       </header>
 
       <main className="app-main">
-        <Suspense fallback={<p className="empty-hint">Loading page…</p>}>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/applications" element={<Applications />} />
-            <Route path="/login" element={<Login />} />
-            <Route
-              path="/my-application"
-              element={
-                <ProtectedRoute>
-                  <MyApplication />
-                </ProtectedRoute>
-              }
-            />
-            <Route path="/countries" element={<Countries />} />
-            <Route path="/country/:country" element={<CountryStats />} />
-            <Route path="/approval-rates" element={<PartnerVisaStats />} />
-            <Route
-              path="/settings"
-              element={
-                <ProtectedRoute>
-                  <Settings />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="*"
-              element={
-                <div className="page-heading">
-                  <div>
-                    <h1>Page not found</h1>
-                    <p>
-                      That page doesn't exist. <NavLink to="/">Back to the dashboard</NavLink>.
-                    </p>
-                  </div>
-                </div>
-              }
-            />
-          </Routes>
-        </Suspense>
+        <RouteErrorBoundary key={location.pathname}>
+          <Suspense fallback={<p className="empty-hint" role="status">Loading page…</p>}>
+            <Outlet />
+          </Suspense>
+        </RouteErrorBoundary>
       </main>
 
       <footer className="app-footer">

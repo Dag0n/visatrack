@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth.jsx";
 
 function GoogleLogo() {
@@ -44,6 +44,11 @@ export default function Login() {
   const [submitting, setSubmitting] = useState(false);
   const { login, signup, loginWithOAuth2 } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const requestedPath = location.state?.from;
+  const returnTo = requestedPath?.pathname?.startsWith("/")
+    ? `${requestedPath.pathname}${requestedPath.search ?? ""}${requestedPath.hash ?? ""}`
+    : "/my-application";
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -55,7 +60,7 @@ export default function Login() {
       } else {
         await signup(email, password);
       }
-      navigate("/my-application");
+      navigate(returnTo, { replace: true });
     } catch {
       setError(
         mode === "login"
@@ -71,7 +76,7 @@ export default function Login() {
     setError("");
     try {
       await loginWithOAuth2(provider);
-      navigate("/my-application");
+      navigate(returnTo, { replace: true });
     } catch {
       setError(`Couldn't sign in with ${provider}.`);
     }

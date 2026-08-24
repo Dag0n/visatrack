@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useBeforeUnload, useBlocker } from "react-router-dom";
 import { pb } from "../lib/pb";
 import { useAuth } from "../lib/auth.jsx";
 import CountrySelect from "../components/CountrySelect";
@@ -379,38 +380,76 @@ function ApplicationCard({ application, onEdit, onDelete }) {
 
 export default function MyApplication() {
   const { user } = useAuth();
-  const [applications, setApplications] = useState([]);
+  const [applicationsState, setApplicationsState] = useState(null);
+  const [loadError, setLoadError] = useState("");
   const [editingId, setEditingId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  const [formBaseline, setFormBaseline] = useState(null);
   const [status, setStatus] = useState("");
   const [validationError, setValidationError] = useState("");
 
-  const loadApplications = useCallback(() => {
-    pb.collection("applications")
+  const loadApplications = useCallback(async (signal) => {
+    try {
+      const records = await pb.collection("applications")
       .getFullList({
         filter: pb.filter("user = {:userId}", { userId: user.id }),
         sort: "-application_date",
         expand: "country_id",
         requestKey: null,
-      })
-      .then(setApplications)
-      .catch((err) => {
-        if (err?.isAbort) return;
-        setApplications([]);
+        signal,
       });
+      if (!signal?.aborted) {
+        setApplicationsState({ userId: user.id, items: records });
+        setLoadError("");
+      }
+    } catch (err) {
+      if (err?.isAbort || signal?.aborted) return;
+      setLoadError("Couldn't load your applications right now.");
+    }
   }, [user.id]);
 
   useEffect(() => {
-    loadApplications();
+    const controller = new AbortController();
+    queueMicrotask(() => {
+      if (!controller.signal.aborted) loadApplications(controller.signal);
+    });
+    return () => controller.abort();
   }, [loadApplications]);
+
+  const applications = applicationsState?.userId === user.id ? applicationsState.items : null;
+
+  const isDirty = useMemo(
+    () => showForm && formBaseline !== null && JSON.stringify(form) !== formBaseline,
+    [form, formBaseline, showForm],
+  );
+  const blocker = useBlocker(isDirty && status !== "saving");
+
+  useEffect(() => {
+    if (blocker.state !== "blocked") return;
+    if (window.confirm("Discard your unsaved application changes?")) blocker.proceed();
+    else blocker.reset();
+  }, [blocker]);
+
+  useBeforeUnload(
+    useCallback(
+      (event) => {
+        if (!isDirty) return;
+        event.preventDefault();
+        event.returnValue = "";
+      },
+      [isDirty],
+    ),
+  );
 
   function update(field, value) {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
   function startNew() {
-    setForm(emptyForm);
+    const nextForm = { ...emptyForm };
+    setForm(nextForm);
+    setFormBaseline(JSON.stringify(nextForm));
     setEditingId(null);
     setStatus("");
     setValidationError("");
@@ -418,7 +457,10 @@ export default function MyApplication() {
   }
 
   function startEdit(record) {
-    setForm(toFormState(record));
+    if (isDirty && !window.confirm("Discard your unsaved application changes?")) return;
+    const nextForm = toFormState(record);
+    setForm(nextForm);
+    setFormBaseline(JSON.stringify(nextForm));
     setEditingId(record.id);
     setStatus("");
     setValidationError("");
@@ -427,12 +469,25 @@ export default function MyApplication() {
 
   async function handleDelete(id) {
     if (!window.confirm("Delete this application entry?")) return;
-    await pb.collection("applications").delete(id);
-    if (editingId === id) {
-      setShowForm(false);
-      setEditingId(null);
+    try {
+      await pb.collection("applications").delete(id);
+      if (editingId === id) {
+        setShowForm(false);
+        setEditingId(null);
+        setFormBaseline(null);
+      }
+      await loadApplications();
+    } catch {
+      setLoadError("Couldn't delete that application. Please try again.");
     }
-    loadApplications();
+  }
+
+  function cancelForm() {
+    if (isDirty && !window.confirm("Discard your unsaved application changes?")) return;
+    setShowForm(false);
+    setEditingId(null);
+    setFormBaseline(null);
+    setValidationError("");
   }
 
   async function handleSubmit(e) {
@@ -490,7 +545,8 @@ export default function MyApplication() {
       setStatus("saved");
       setShowForm(false);
       setEditingId(null);
-      loadApplications();
+      setFormBaseline(null);
+      await loadApplications();
     } catch (err) {
       console.error("Application save failed", err);
       setStatus("error");
@@ -513,13 +569,35 @@ export default function MyApplication() {
         )}
       </div>
 
-      <ClaimCallout
-        key={user.id}
-        hasApplications={applications.length > 0}
-        onClaimed={loadApplications}
-      />
+      {applications && (
+        <ClaimCallout
+          key={user.id}
+          hasApplications={applications.length > 0}
+          onClaimed={loadApplications}
+        />
+      )}
 
-      {applications.length > 0 && (
+      {applications === null && !loadError && (
+        <p className="empty-hint" role="status">Loading your applications…</p>
+      )}
+
+      {loadError && (
+        <div className="inline-error" role="alert">
+          <span>{loadError}</span>
+          <button
+            type="button"
+            className="small-button"
+            onClick={() => {
+              setLoadError("");
+              loadApplications();
+            }}
+          >
+            Try again
+          </button>
+        </div>
+      )}
+
+      {applications?.length > 0 && (
         <div className="application-card-list">
           {applications.map((application) => (
             <ApplicationCard
@@ -532,7 +610,7 @@ export default function MyApplication() {
         </div>
       )}
 
-      {!showForm && applications.length === 0 && (
+      {!showForm && applications?.length === 0 && !loadError && (
         <div className="empty-state">
           <span className="empty-state-icon">⌁</span>
           <h2>Start your first timeline</h2>
@@ -557,15 +635,18 @@ export default function MyApplication() {
                 onChange={(e) => update("reddit_post_url", e.target.value)}
               />
             </label>
-            <label>
-              Country applying from
-              <Required />
+            <div className="form-field">
+              <label htmlFor="application-country">
+                Country applying from
+                <Required />
+              </label>
               <CountrySelect
+                id="application-country"
                 value={form.country_id}
                 onChange={(id) => update("country_id", id)}
                 required
               />
-            </label>
+            </div>
             <label>
               Visa type
               <Required />
@@ -663,15 +744,12 @@ export default function MyApplication() {
             </label>
 
             {validationError && <p className="error-text">{validationError}</p>}
-            {status === "error" && (
-              <p className="error-text">Something went wrong saving your application.</p>
-            )}
 
             <div style={{ display: "flex", gap: 12 }}>
               <button type="submit" disabled={status === "saving"}>
                 {editingId ? "Update" : "Submit"}
               </button>
-              <button type="button" className="link-button" onClick={() => setShowForm(false)}>
+              <button type="button" className="link-button" onClick={cancelForm}>
                 Cancel
               </button>
             </div>
