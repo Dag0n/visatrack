@@ -55,10 +55,12 @@ export default function GroupBarChart({ title, data, labels = {} }) {
         options={WINDOW_OPTIONS}
         value={selectedWindow}
         onChange={setSelectedWindow}
+        label={`${title} time window`}
       />
       {chartData.length === 0 ? (
         <p className="empty-hint">Not enough decided applications yet.</p>
       ) : (
+        <div role="img" aria-label={`${title}: average UK working days by group, based on ${sampleSize} decisions`}>
         <ResponsiveContainer width="100%" height={260}>
           <BarChart data={chartData} margin={{ top: 18 }}>
             <CartesianGrid strokeDasharray="3 3" />
@@ -94,6 +96,18 @@ export default function GroupBarChart({ title, data, labels = {} }) {
             </Bar>
           </BarChart>
         </ResponsiveContainer>
+        </div>
+      )}
+      {chartData.length > 0 && (
+        <table className="sr-only">
+          <caption>{title}</caption>
+          <thead><tr><th>Group</th><th>Average working days</th><th>Decisions</th></tr></thead>
+          <tbody>
+            {chartData.map((row) => (
+              <tr key={row.key}><th>{row.key}</th><td>{row.avgDays}</td><td>{row.count}</td></tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   );

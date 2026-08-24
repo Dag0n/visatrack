@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import FilterButtonGroup from "./FilterButtonGroup";
 import { PRIORITY_FILTER_OPTIONS } from "../lib/labels";
 import { formatApprovalRate, round1 } from "../lib/format";
+import { LOW_SAMPLE } from "../lib/chartTheme";
 
 // `limit` renders a compact teaser (top N rows, no search) with a link to the
 // full Countries page — used on the Dashboard. Without it, the full searchable
@@ -28,6 +29,7 @@ export default function CountryTable({ data, priorityFilter, onPriorityFilterCha
         options={PRIORITY_FILTER_OPTIONS}
         value={priorityFilter}
         onChange={onPriorityFilterChange}
+        label="Country service level"
       />
 
       {!limit && (
@@ -54,9 +56,10 @@ export default function CountryTable({ data, priorityFilter, onPriorityFilterCha
           </thead>
           <tbody>
             {filtered.map((row) => (
-              <tr key={row.key}>
+              <tr key={row.key} className={row.count < LOW_SAMPLE ? "low-sample-row" : undefined}>
                 <td>
                     <Link to={`/country/${encodeURIComponent(row.key)}`}>{row.key}</Link>
+                    {row.count < LOW_SAMPLE && <span className="low-sample-label">Small sample</span>}
                   </td>
                 <td>{row.count}</td>
                 <td>{round1(row.avgDays)}</td>
@@ -66,6 +69,11 @@ export default function CountryTable({ data, priorityFilter, onPriorityFilterCha
           </tbody>
         </table>
         </div>
+      )}
+      {filtered.some((row) => row.count < LOW_SAMPLE) && (
+        <p className="optional-hint low-sample-note">
+          Faded rows have fewer than {LOW_SAMPLE} reported decisions; treat their averages and approval shares as anecdotal.
+        </p>
       )}
       {limit && data.length > limit && (
         <p className="optional-hint" style={{ marginTop: 10, marginBottom: 0 }}>

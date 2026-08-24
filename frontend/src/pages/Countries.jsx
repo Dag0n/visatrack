@@ -6,6 +6,7 @@ export default function Countries() {
   const [stats, setStats] = useState(null);
   const [error, setError] = useState("");
   const [countryPriority, setCountryPriority] = useState("none");
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -15,10 +16,19 @@ export default function Countries() {
         if (!isAbortError(err)) setError("Couldn't load countries right now.");
       });
     return () => controller.abort();
-  }, [countryPriority]);
+  }, [countryPriority, retryKey]);
 
-  if (error) return <p className="empty-hint">{error}</p>;
-  if (!stats) return <p className="empty-hint">Loading…</p>;
+  function changeCountryPriority(value) {
+    setStats(null);
+    setError("");
+    setCountryPriority(value);
+  }
+
+  function retry() {
+    setStats(null);
+    setError("");
+    setRetryKey((key) => key + 1);
+  }
 
   return (
     <div className="countries-page">
@@ -32,11 +42,22 @@ export default function Countries() {
           </p>
         </div>
       </div>
-      <CountryTable
-        data={stats.byCountry ?? []}
-        priorityFilter={countryPriority}
-        onPriorityFilterChange={setCountryPriority}
-      />
+      {error && (
+        <div className="inline-error" role="alert">
+          <span>{error}</span>
+          <button type="button" className="small-button" onClick={retry}>
+            Try again
+          </button>
+        </div>
+      )}
+      {!error && !stats && <p className="empty-hint" role="status">Loading countries…</p>}
+      {!error && stats && (
+        <CountryTable
+          data={stats.byCountry ?? []}
+          priorityFilter={countryPriority}
+          onPriorityFilterChange={changeCountryPriority}
+        />
+      )}
     </div>
   );
 }

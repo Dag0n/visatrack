@@ -14,6 +14,7 @@ export default function Dashboard() {
   const [stats, setStats] = useState(null);
   const [error, setError] = useState("");
   const [countryPriority, setCountryPriority] = useState("none");
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -23,20 +24,24 @@ export default function Dashboard() {
         if (!isAbortError(err)) setError("Couldn't load stats right now.");
       });
     return () => controller.abort();
-  }, [countryPriority]);
+  }, [countryPriority, retryKey]);
 
-  if (error) {
-    return <p className="empty-hint">{error}</p>;
-  }
-
-  if (!stats) {
-    return <p className="empty-hint">Loading stats…</p>;
-  }
-
-  const outcomes = stats.outcomes ?? {};
+  const outcomes = stats?.outcomes ?? {};
   const approved = outcomes.approved ?? 0;
   const rejected = outcomes.rejected ?? 0;
   const pending = outcomes.pending ?? 0;
+
+  function changeCountryPriority(value) {
+    setStats(null);
+    setError("");
+    setCountryPriority(value);
+  }
+
+  function retry() {
+    setStats(null);
+    setError("");
+    setRetryKey((key) => key + 1);
+  }
   return (
     <div className="dashboard-page">
       <section className="hero">
@@ -64,6 +69,23 @@ export default function Dashboard() {
         </div>
       </section>
 
+      {error && (
+        <div className="inline-error" role="alert">
+          <span>{error}</span>
+          <button type="button" className="small-button" onClick={retry}>
+            Try again
+          </button>
+        </div>
+      )}
+
+      {!error && !stats && (
+        <div className="dashboard-skeleton" role="status" aria-label="Loading community statistics">
+          <span /><span /><span />
+        </div>
+      )}
+
+      {!error && stats && (
+        <>
       <div className="section-heading">
         <div>
           <span className="eyebrow plain">At a glance</span>
@@ -107,10 +129,12 @@ export default function Dashboard() {
       <CountryTable
         data={stats.byCountry ?? []}
         priorityFilter={countryPriority}
-        onPriorityFilterChange={setCountryPriority}
+        onPriorityFilterChange={changeCountryPriority}
         limit={10}
       />
       <MonthlyTable data={stats.byMonth ?? {}} />
+        </>
+      )}
 
       <section className="contribution-banner">
         <div className="contribution-mark">＋</div>

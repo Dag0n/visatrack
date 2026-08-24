@@ -39,6 +39,7 @@ export default function PartnerVisaStats() {
   const [sortDir, setSortDir] = useState("desc");
   const [chartMode, setChartMode] = useState("rate");
   const [showAllRows, setShowAllRows] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -48,7 +49,7 @@ export default function PartnerVisaStats() {
         if (!isAbortError(err)) setError("Couldn't load approval rates right now.");
       });
     return () => controller.abort();
-  }, []);
+  }, [retryKey]);
 
   const rows = useMemo(() => data?.rows ?? [], [data]);
 
@@ -146,8 +147,25 @@ export default function PartnerVisaStats() {
     }
   }
 
-  if (error) return <p className="empty-hint">{error}</p>;
-  if (!data) return <p className="empty-hint">Loading…</p>;
+  if (error) {
+    return (
+      <div className="inline-error" role="alert">
+        <span>{error}</span>
+        <button
+          type="button"
+          className="small-button"
+          onClick={() => {
+            setData(null);
+            setError("");
+            setRetryKey((key) => key + 1);
+          }}
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+  if (!data) return <p className="empty-hint" role="status">Loading approval rates…</p>;
 
   const yearRange = minYear === null ? "" : `${minYear}–${maxYear}`;
 
@@ -208,13 +226,19 @@ export default function PartnerVisaStats() {
               : `Issued and refused partner visa applications per year, ${yearRange}.`}
           {maxYear ? ` ${maxYear} covers January–March only.` : ""}
         </p>
-        <FilterButtonGroup options={CHART_MODES} value={chartMode} onChange={setChartMode} />
+        <FilterButtonGroup
+          options={CHART_MODES}
+          value={chartMode}
+          onChange={setChartMode}
+          label="Chart measure"
+        />
         {chartMode === "rate" ? (
           <StatLineChart
             data={chartData}
             height={300}
             yLabel="Approval %"
             yDomain={[0, 100]}
+            summary={`Official partner visa approval rates by year${selectedCountry ? `, comparing all countries with ${selectedCountry}` : ""}`}
             tooltipFormatter={(value, name, item) => {
               const point = item?.payload ?? {};
               const issued = name === "country" ? point.countryIssued : point.issued;
@@ -238,6 +262,7 @@ export default function PartnerVisaStats() {
             height={300}
             yLabel="Applications"
             allowDecimals={false}
+            summary={`Official partner visa issued and refused volumes by year${selectedCountry ? ` for ${selectedCountry}` : " across all countries"}`}
             tooltipFormatter={(value, name) => [
               value.toLocaleString(),
               name === "issued" ? "Issued" : "Refused",
@@ -273,14 +298,15 @@ export default function PartnerVisaStats() {
               <thead>
                 <tr>
                   {SORT_COLUMNS.map((col) => (
-                    <th
-                      key={col.key}
-                      onClick={() => toggleSort(col.key)}
-                      style={{ cursor: "pointer", userSelect: "none" }}
-                      aria-sort={sortKey === col.key ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
-                    >
-                      {col.label}
-                      {sortKey === col.key ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+                    <th key={col.key} aria-sort={sortKey === col.key ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                      <button
+                        type="button"
+                        className="table-sort-button"
+                        onClick={() => toggleSort(col.key)}
+                      >
+                        {col.label}
+                        {sortKey === col.key ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+                      </button>
                     </th>
                   ))}
                 </tr>
@@ -289,14 +315,22 @@ export default function PartnerVisaStats() {
                 {(showAllRows || search.trim() ? tableRows : tableRows.slice(0, 30)).map((row) => (
                   <tr
                     key={row.country}
-                    onClick={() => setSelectedCountry(row.country)}
                     style={{
-                      cursor: "pointer",
                       opacity: row.decided < LOW_SAMPLE ? 0.45 : 1,
                       background: row.country === selectedCountry ? "rgba(47, 111, 237, 0.08)" : undefined,
                     }}
                   >
-                    <td>{row.country}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="table-row-link"
+                        onClick={() => setSelectedCountry(row.country)}
+                        aria-label={`Compare ${row.country} on the chart`}
+                        aria-pressed={row.country === selectedCountry}
+                      >
+                        {row.country}
+                      </button>
+                    </td>
                     <td>{row.issued.toLocaleString()}</td>
                     <td>{row.refused.toLocaleString()}</td>
                     <td>{row.decided.toLocaleString()}</td>
