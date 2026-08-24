@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { pb } from "../lib/pb";
 import { useAuth } from "../lib/auth.jsx";
 import CountrySelect from "../components/CountrySelect";
-import { stripRedditPrefix } from "../lib/format";
+import { fetchCustom, isAbortError } from "../lib/api";
+import { formatDate, localToday, stripRedditPrefix } from "../lib/format";
 import { PRIORITY_LABELS, VISA_TYPE_LABELS } from "../lib/labels";
 import { processingStartDate, workingDaysBetween } from "../lib/processingDays";
 import StatusBadge from "../components/StatusBadge";
@@ -115,14 +116,7 @@ function validationMessage(err) {
   return details || err?.response?.message || "Something went wrong saving your application.";
 }
 
-function shortDate(value) {
-  if (!value) return null;
-  return new Date(value).toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
+const shortDate = formatDate;
 
 function CohortInsight({ application }) {
   const [cohort, setCohort] = useState(null);
@@ -133,20 +127,19 @@ function CohortInsight({ application }) {
 
   useEffect(() => {
     if (!application.country_id || !application.biometrics_date) return;
-    const base = pb.baseURL.replace(/\/$/, "");
+    const controller = new AbortController();
     const params = new URLSearchParams({
       country: application.country_id,
       visaType: application.visa_type,
       priority: application.priority_service,
       elapsed: String(elapsed),
     });
-    fetch(`${base}/api/custom/cohort?${params}`)
-      .then((response) => {
-        if (!response.ok) throw new Error("Cohort request failed");
-        return response.json();
-      })
+    fetchCustom(`/cohort?${params}`, { signal: controller.signal })
       .then(setCohort)
-      .catch(() => setFailed(true));
+      .catch((err) => {
+        if (!isAbortError(err)) setFailed(true);
+      });
+    return () => controller.abort();
   }, [
     application.country_id,
     application.biometrics_date,
@@ -181,7 +174,7 @@ function CohortInsight({ application }) {
         </div>
         <div className="cohort-percent">
           <strong>{cohort.decidedByNow}%</strong>
-          <span>decided by now</span>
+          <span>of completed cases finished by this working day</span>
         </div>
       </div>
       <div className="cohort-track" aria-label={`Working day ${elapsed}`}>
@@ -193,9 +186,10 @@ function CohortInsight({ application }) {
         <strong>Median {cohort.medianDays} WD</strong>
       </div>
       <p>
-        Compared with {cohort.count} recent {PRIORITY_LABELS[application.priority_service]?.toLowerCase()}{" "}
-        {VISA_TYPE_LABELS[application.visa_type]?.toLowerCase()} decisions
-        {cohort.scope === "country" ? ` from ${cohort.country}` : " across all countries"}.
+        Based on {cohort.count} reported completed {PRIORITY_LABELS[application.priority_service]?.toLowerCase()}{" "}
+        {VISA_TYPE_LABELS[application.visa_type]?.toLowerCase()} cases decided in the last 12 months
+        {cohort.scope === "country" ? ` from ${cohort.country}` : " across all countries"}. Only cases
+        with a reported outcome are included; this is not a forecast.
       </p>
     </div>
   );
@@ -335,6 +329,10 @@ function ApplicationCard({ application, onEdit, onDelete }) {
     { label: "Applied", date: application.application_date },
     { label: "Biometrics", date: application.biometrics_date },
     { label: "ECO", date: application.eco_email_date },
+    // RFI and NSF only happen on some applications — show them only once dated
+    // so the timeline doesn't imply everyone should expect them.
+    ...(application.rfi_date ? [{ label: "RFI", date: application.rfi_date }] : []),
+    ...(application.nsf_email_date ? [{ label: "NSF", date: application.nsf_email_date }] : []),
     { label: "Decision", date: application.decision_date },
   ];
 
@@ -362,7 +360,7 @@ function ApplicationCard({ application, onEdit, onDelete }) {
         </div>
       </div>
 
-      <div className="milestone-timeline">
+      <div className="milestone-timeline" style={{ "--milestone-count": milestones.length }}>
         {milestones.map((milestone, index) => (
           <div className={milestone.date ? "milestone complete" : "milestone"} key={milestone.label}>
             <span className="milestone-dot">{milestone.date ? "✓" : index + 1}</span>
@@ -371,6 +369,8 @@ function ApplicationCard({ application, onEdit, onDelete }) {
           </div>
         ))}
       </div>
+
+      {application.notes && <p className="application-notes">{application.notes}</p>}
 
       <CohortInsight application={application} />
     </article>
@@ -389,7 +389,7 @@ export default function MyApplication() {
   const loadApplications = useCallback(() => {
     pb.collection("applications")
       .getFullList({
-        filter: `user = "${user.id}"`,
+        filter: pb.filter("user = {:userId}", { userId: user.id }),
         sort: "-application_date",
         expand: "country_id",
         requestKey: null,
@@ -453,7 +453,7 @@ export default function MyApplication() {
       ["nsf_email_date", "NSF email date"],
       ["decision_date", "Decision date"],
     ];
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localToday();
     const futureField = datedFields.find(([field]) => form[field] > today);
     if (futureField) {
       setValidationError(`${futureField[1]} cannot be in the future.`);
