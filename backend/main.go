@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -59,16 +60,60 @@ type countryMonthRow struct {
 	AvgDays         float64 `json:"avg_days"`
 }
 
+// countryPrioritySummary is an all-time rollup of one country's applications
+// for one priority-service key ("all" plus each service level).
+type countryPrioritySummary struct {
+	Total         int     `json:"total"`
+	Pending       int     `json:"pending"`
+	Decided       int     `json:"decided"`
+	Approved      int     `json:"approved"`
+	Measured      int     `json:"measured"`
+	AvgDays       float64 `json:"avgDays"`
+	MedianDays    float64 `json:"medianDays"`
+	LowerQuartile float64 `json:"lowerQuartile"`
+	UpperQuartile float64 `json:"upperQuartile"`
+}
+
 type countryStatsResponse struct {
-	Country string            `json:"country"`
-	Rows    []countryMonthRow `json:"rows"`
+	Country string                            `json:"country"`
+	Rows    []countryMonthRow                 `json:"rows"`
+	Summary map[string]countryPrioritySummary `json:"summary"`
 }
 
 type rawCountryApp struct {
 	VisaType        string `db:"visa_type"`
 	PriorityService string `db:"priority_service"`
+	Outcome         string `db:"outcome"`
 	BiometricsDate  string `db:"biometrics_date"`
 	DecisionDate    string `db:"decision_date"`
+}
+
+type explorerFilters struct {
+	Status    string
+	Visa      string
+	Service   string
+	Milestone string
+	Country   string
+	BioFrom   string
+	BioTo     string
+}
+
+type rawExplorerApp struct {
+	Outcome        string `db:"outcome"`
+	BiometricsDate string `db:"biometrics_date"`
+	DecisionDate   string `db:"decision_date"`
+}
+
+type explorerDaySummary struct {
+	Measured int     `json:"measured"`
+	Average  float64 `json:"average"`
+	Median   float64 `json:"median"`
+}
+
+type explorerSummaryResponse struct {
+	Total     int                `json:"total"`
+	Pending   explorerDaySummary `json:"pending"`
+	Completed explorerDaySummary `json:"completed"`
 }
 
 type partnerVisaStatRow struct {
@@ -155,6 +200,19 @@ func main() {
 	app.OnRecordUpdateRequest("applications").BindFunc(validateApplicationRequest)
 
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
+		se.Router.GET("/api/custom/application-summary", func(e *core.RequestEvent) error {
+			filters, err := parseExplorerFilters(e.Request.URL.Query())
+			if err != nil {
+				return e.BadRequestError(err.Error(), nil)
+			}
+
+			summary, err := buildExplorerSummary(e.App, filters, time.Now())
+			if err != nil {
+				return e.InternalServerError("failed to build application summary", err)
+			}
+			return e.JSON(http.StatusOK, summary)
+		})
+
 		se.Router.GET("/api/custom/stats", func(e *core.RequestEvent) error {
 			countryPriority := e.Request.URL.Query().Get("countryPriority")
 
@@ -172,17 +230,17 @@ func main() {
 				return e.BadRequestError("country parameter is required", nil)
 			}
 
-			cutoff := time.Now().AddDate(0, -12, 0).Format("2006-01-02")
+			cutoff := time.Now().AddDate(0, -12, 0)
 
+			// All applications for the country: the monthly rows below keep
+			// the 12-month decided window, while the summary rolls up all time.
 			var raw []rawCountryApp
 			err := e.App.DB().NewQuery(
-				`SELECT a.visa_type, a.priority_service, a.biometrics_date, a.decision_date
+				`SELECT a.visa_type, a.priority_service, a.outcome, a.biometrics_date, a.decision_date
 					 FROM applications a
 					 LEFT JOIN countries c ON c.id = a.country_id
-					 WHERE c.name = {:country}
-					   AND a.outcome IN ('approved', 'rejected')
-					   AND a.decision_date >= {:cutoff}`,
-			).Bind(dbx.Params{"country": country, "cutoff": cutoff}).All(&raw)
+					 WHERE c.name = {:country}`,
+			).Bind(dbx.Params{"country": country}).All(&raw)
 			if err != nil {
 				return e.InternalServerError("failed to query country stats", err)
 			}
@@ -198,10 +256,46 @@ func main() {
 				sum      float64
 			}
 			aggs := map[aggKey]*countryMonthAgg{}
+			summaries := map[string]*countryPrioritySummary{}
+			summaryAggs := map[string]*dayAgg{}
 
 			for _, r := range raw {
+				days, hasDays := processingDays(rawApplication{
+					BiometricsDate: r.BiometricsDate,
+					DecisionDate:   r.DecisionDate,
+				})
+				decided := r.Outcome == "approved" || r.Outcome == "rejected"
+				approved := r.Outcome == "approved"
+
+				for _, key := range []string{"all", r.PriorityService} {
+					if summaries[key] == nil {
+						summaries[key] = &countryPrioritySummary{}
+					}
+					s := summaries[key]
+					s.Total++
+					if r.Outcome == "pending" {
+						s.Pending++
+					}
+					if decided {
+						s.Decided++
+						if approved {
+							s.Approved++
+						}
+						if hasDays {
+							s.Measured++
+							if summaryAggs[key] == nil {
+								summaryAggs[key] = &dayAgg{}
+							}
+							summaryAggs[key].add(days, approved)
+						}
+					}
+				}
+
+				if !decided {
+					continue
+				}
 				decision, ok := parseDate(r.DecisionDate)
-				if !ok {
+				if !ok || decision.Before(cutoff) {
 					continue
 				}
 				month := decision.Format("2006-01")
@@ -209,10 +303,6 @@ func main() {
 				if aggs[key] == nil {
 					aggs[key] = &countryMonthAgg{}
 				}
-				days, hasDays := processingDays(rawApplication{
-					BiometricsDate: r.BiometricsDate,
-					DecisionDate:   r.DecisionDate,
-				})
 				aggs[key].decided++
 				if hasDays {
 					aggs[key].measured++
@@ -242,16 +332,29 @@ func main() {
 				return rows[i].VisaType < rows[j].VisaType
 			})
 
-			return e.JSON(http.StatusOK, countryStatsResponse{Country: country, Rows: rows})
+			summary := map[string]countryPrioritySummary{}
+			for key, s := range summaries {
+				if agg := summaryAggs[key]; agg != nil {
+					sortedDays := append([]float64{}, agg.days...)
+					sort.Float64s(sortedDays)
+					s.AvgDays = math.Round(agg.avg()*10) / 10
+					s.MedianDays = math.Round(agg.median()*10) / 10
+					s.LowerQuartile = math.Round(percentile(sortedDays, 0.25)*10) / 10
+					s.UpperQuartile = math.Round(percentile(sortedDays, 0.75)*10) / 10
+				}
+				summary[key] = *s
+			}
+
+			return e.JSON(http.StatusOK, countryStatsResponse{Country: country, Rows: rows, Summary: summary})
 		})
 
 		se.Router.GET("/api/custom/partner-visa-stats", func(e *core.RequestEvent) error {
 			rows := []partnerVisaStatRow{}
 			err := e.App.DB().NewQuery(
-				`SELECT c.name AS country, s.year, s.issued, s.refused, s.withdrawn, s.lapsed
+				`SELECT COALESCE(c.name, 'Other / unknown') AS country, s.year, s.issued, s.refused, s.withdrawn, s.lapsed
 					 FROM partner_visa_stats s
-					 JOIN countries c ON c.id = s.country
-					 ORDER BY c.name, s.year`,
+					 LEFT JOIN countries c ON c.id = s.country
+					 ORDER BY country, s.year`,
 			).All(&rows)
 			if err != nil {
 				return e.InternalServerError("failed to query partner visa stats", err)
@@ -355,6 +458,178 @@ var validPriorities = map[string]bool{
 	"none":           true,
 	"priority":       true,
 	"super_priority": true,
+}
+
+var validVisaTypes = map[string]bool{
+	"spouse":            true,
+	"fiance":            true,
+	"unmarried_partner": true,
+	"extension":         true,
+	"other":             true,
+}
+
+var validExplorerStatuses = map[string]bool{
+	"pending":  true,
+	"approved": true,
+	"rejected": true,
+	"all":      true,
+}
+
+var validExplorerMilestones = map[string]bool{
+	"all":  true,
+	"eco":  true,
+	"rfi":  true,
+	"nsf":  true,
+	"none": true,
+}
+
+func explorerOption(values url.Values, key, fallback string, allowed map[string]bool) (string, error) {
+	value := strings.TrimSpace(values.Get(key))
+	if value == "" {
+		return fallback, nil
+	}
+	if !allowed[value] {
+		return "", fmt.Errorf("invalid %s parameter", key)
+	}
+	return value, nil
+}
+
+func explorerDate(values url.Values, key string) (string, error) {
+	value := strings.TrimSpace(values.Get(key))
+	if value == "" {
+		return "", nil
+	}
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil || parsed.Format("2006-01-02") != value {
+		return "", fmt.Errorf("invalid %s parameter", key)
+	}
+	return value, nil
+}
+
+func parseExplorerFilters(values url.Values) (explorerFilters, error) {
+	filters := explorerFilters{Country: strings.TrimSpace(values.Get("country"))}
+	var err error
+
+	if filters.Status, err = explorerOption(values, "status", "pending", validExplorerStatuses); err != nil {
+		return explorerFilters{}, err
+	}
+	visaOptions := map[string]bool{"all": true}
+	for value := range validVisaTypes {
+		visaOptions[value] = true
+	}
+	if filters.Visa, err = explorerOption(values, "visa", "all", visaOptions); err != nil {
+		return explorerFilters{}, err
+	}
+	serviceOptions := map[string]bool{"all": true}
+	for value := range validPriorities {
+		serviceOptions[value] = true
+	}
+	if filters.Service, err = explorerOption(values, "service", "all", serviceOptions); err != nil {
+		return explorerFilters{}, err
+	}
+	if filters.Milestone, err = explorerOption(values, "milestone", "all", validExplorerMilestones); err != nil {
+		return explorerFilters{}, err
+	}
+	if filters.BioFrom, err = explorerDate(values, "bioFrom"); err != nil {
+		return explorerFilters{}, err
+	}
+	if filters.BioTo, err = explorerDate(values, "bioTo"); err != nil {
+		return explorerFilters{}, err
+	}
+	if filters.BioFrom != "" && filters.BioTo != "" && filters.BioFrom > filters.BioTo {
+		return explorerFilters{}, fmt.Errorf("bioFrom must be on or before bioTo")
+	}
+
+	return filters, nil
+}
+
+func buildExplorerSummary(app core.App, filters explorerFilters, now time.Time) (*explorerSummaryResponse, error) {
+	query := `SELECT a.outcome, a.biometrics_date, a.decision_date
+		FROM applications a
+		LEFT JOIN countries c ON c.id = a.country_id
+		WHERE 1 = 1`
+	params := dbx.Params{}
+
+	if filters.Status != "all" {
+		query += " AND a.outcome = {:outcome}"
+		params["outcome"] = filters.Status
+	}
+	if filters.Visa != "all" {
+		query += " AND a.visa_type = {:visa}"
+		params["visa"] = filters.Visa
+	}
+	if filters.Service != "all" {
+		query += " AND a.priority_service = {:service}"
+		params["service"] = filters.Service
+	}
+	switch filters.Milestone {
+	case "eco":
+		query += " AND COALESCE(a.eco_email_date, '') != ''"
+	case "rfi":
+		query += " AND COALESCE(a.rfi_date, '') != ''"
+	case "nsf":
+		query += " AND COALESCE(a.nsf_email_date, '') != ''"
+	case "none":
+		query += ` AND COALESCE(a.eco_email_date, '') = ''
+			AND COALESCE(a.rfi_date, '') = ''
+			AND COALESCE(a.nsf_email_date, '') = ''`
+	}
+	if filters.Country != "" {
+		query += " AND INSTR(LOWER(COALESCE(c.name, '')), LOWER({:country})) > 0"
+		params["country"] = filters.Country
+	}
+	if filters.BioFrom != "" {
+		query += " AND a.biometrics_date >= {:bioFrom}"
+		params["bioFrom"] = filters.BioFrom + " 00:00:00.000Z"
+	}
+	if filters.BioTo != "" {
+		query += " AND a.biometrics_date <= {:bioTo}"
+		params["bioTo"] = filters.BioTo + " 23:59:59.999Z"
+	}
+
+	var rows []rawExplorerApp
+	if err := app.DB().NewQuery(query).Bind(params).All(&rows); err != nil {
+		return nil, err
+	}
+
+	return summariseExplorerRows(rows, now), nil
+}
+
+func summariseExplorerRows(rows []rawExplorerApp, now time.Time) *explorerSummaryResponse {
+	pending := &dayAgg{}
+	completed := &dayAgg{}
+
+	for _, row := range rows {
+		application := rawApplication{
+			Outcome:        row.Outcome,
+			BiometricsDate: row.BiometricsDate,
+			DecisionDate:   row.DecisionDate,
+		}
+		switch row.Outcome {
+		case "pending":
+			if start, ok := processingStart(application); ok {
+				pending.add(workingDaysBetween(start, now), false)
+			}
+		case "approved", "rejected":
+			if days, ok := processingDays(application); ok {
+				completed.add(days, row.Outcome == "approved")
+			}
+		}
+	}
+
+	return &explorerSummaryResponse{
+		Total: len(rows),
+		Pending: explorerDaySummary{
+			Measured: pending.count,
+			Average:  pending.avg(),
+			Median:   pending.median(),
+		},
+		Completed: explorerDaySummary{
+			Measured: completed.count,
+			Average:  completed.avg(),
+			Median:   completed.median(),
+		},
+	}
 }
 
 // maskRedditUsername hides the middle of a username (e.g. "johnsmith" ->
@@ -577,7 +852,10 @@ func buildCohort(
 	priority string,
 	elapsed int,
 ) (*cohortResponse, error) {
-	cutoff := time.Now().AddDate(0, -6, 0).Format("2006-01-02")
+	// Keep the comparison recent enough to reflect current processing patterns,
+	// while using a full year so smaller country/route cohorts remain useful.
+	// Only applications with a reported decision are included.
+	cutoff := time.Now().AddDate(0, -12, 0).Format("2006-01-02")
 	var rows []rawCohortApp
 	err := app.DB().NewQuery(
 		`SELECT a.country_id, c.name as country, a.biometrics_date, a.decision_date
@@ -780,9 +1058,11 @@ func buildStats(app core.App, countryPriority string) (*statsResponse, error) {
 		})
 	}
 
-	sort.Slice(resp.ByCountry, func(i, j int) bool { return resp.ByCountry[i].Count > resp.ByCountry[j].Count })
-	if len(resp.ByCountry) > 50 {
-		resp.ByCountry = resp.ByCountry[:50]
-	}
+	sort.Slice(resp.ByCountry, func(i, j int) bool {
+		if resp.ByCountry[i].Count != resp.ByCountry[j].Count {
+			return resp.ByCountry[i].Count > resp.ByCountry[j].Count
+		}
+		return resp.ByCountry[i].Key < resp.ByCountry[j].Key
+	})
 	return resp, nil
 }

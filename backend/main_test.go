@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/url"
 	"testing"
 	"time"
 )
@@ -61,5 +62,74 @@ func TestPercentileInterpolates(t *testing.T) {
 	}
 	if got := percentile(values, 0.75); got != 32.5 {
 		t.Fatalf("75th percentile = %v, want 32.5", got)
+	}
+}
+
+func TestParseExplorerFilters(t *testing.T) {
+	filters, err := parseExplorerFilters(url.Values{
+		"status":    {"all"},
+		"visa":      {"spouse"},
+		"service":   {"priority"},
+		"milestone": {"eco"},
+		"country":   {"  France  "},
+		"bioFrom":   {"2026-01-02"},
+		"bioTo":     {"2026-03-04"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filters.Status != "all" || filters.Visa != "spouse" || filters.Service != "priority" ||
+		filters.Milestone != "eco" || filters.Country != "France" ||
+		filters.BioFrom != "2026-01-02" || filters.BioTo != "2026-03-04" {
+		t.Fatalf("parseExplorerFilters() = %#v", filters)
+	}
+
+	defaults, err := parseExplorerFilters(url.Values{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.Status != "pending" || defaults.Visa != "all" ||
+		defaults.Service != "all" || defaults.Milestone != "all" {
+		t.Fatalf("default filters = %#v", defaults)
+	}
+}
+
+func TestParseExplorerFiltersRejectsInvalidValues(t *testing.T) {
+	tests := []url.Values{
+		{"status": {"waiting"}},
+		{"visa": {"student"}},
+		{"service": {"fast"}},
+		{"milestone": {"decision"}},
+		{"bioFrom": {"2026-02-30"}},
+		{"bioTo": {"not-a-date"}},
+		{"bioFrom": {"2026-03-02"}, "bioTo": {"2026-03-01"}},
+	}
+
+	for _, values := range tests {
+		if _, err := parseExplorerFilters(values); err == nil {
+			t.Fatalf("parseExplorerFilters(%v) returned no error", values)
+		}
+	}
+}
+
+func TestSummariseExplorerRowsSeparatesPendingAndCompleted(t *testing.T) {
+	now := mustDate(t, "2026-07-31")
+	rows := []rawExplorerApp{
+		{Outcome: "pending", BiometricsDate: "2026-07-27"},
+		{Outcome: "pending"},
+		{Outcome: "approved", BiometricsDate: "2026-07-24", DecisionDate: "2026-07-31"},
+		{Outcome: "rejected", BiometricsDate: "2026-07-27", DecisionDate: "2026-07-29"},
+		{Outcome: "approved", DecisionDate: "2026-07-31"},
+	}
+
+	summary := summariseExplorerRows(rows, now)
+	if summary.Total != 5 {
+		t.Fatalf("total = %d, want 5", summary.Total)
+	}
+	if summary.Pending.Measured != 1 || summary.Pending.Average != 4 || summary.Pending.Median != 4 {
+		t.Fatalf("pending summary = %#v", summary.Pending)
+	}
+	if summary.Completed.Measured != 2 || summary.Completed.Average != 3.5 || summary.Completed.Median != 3.5 {
+		t.Fatalf("completed summary = %#v", summary.Completed)
 	}
 }
