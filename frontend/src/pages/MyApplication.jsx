@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBeforeUnload, useBlocker } from "react-router-dom";
 import { pb } from "../lib/pb";
 import { useAuth } from "../lib/auth.jsx";
@@ -6,6 +6,7 @@ import CountrySelect from "../components/CountrySelect";
 import { fetchCustom, isAbortError } from "../lib/api";
 import { formatDate, localToday, stripRedditPrefix } from "../lib/format";
 import { PRIORITY_LABELS, VISA_TYPE_LABELS } from "../lib/labels";
+import { usePageTitle } from "../lib/usePageTitle";
 import { processingStartDate, workingDaysBetween } from "../lib/processingDays";
 import StatusBadge from "../components/StatusBadge";
 
@@ -104,17 +105,32 @@ function buildPayload(form, user, isEditing) {
   return payload;
 }
 
-function validationMessage(err) {
+const FIELD_LABELS = {
+  country_id: "Country",
+  application_date: "Application date",
+  biometrics_date: "Biometrics date",
+  eco_email_date: "ECO email date",
+  rfi_date: "RFI date",
+  nsf_email_date: "NSF email date",
+  decision_date: "Decision date",
+  outcome: "Outcome",
+  visa_type: "Visa type",
+  priority_service: "Priority service",
+  reddit_post_url: "Reddit post link",
+  rejection_reason: "Rejection reason",
+  notes: "Notes",
+};
+
+// Turns a PocketBase error into user-readable messages, one per failed field.
+function validationMessages(err) {
+  const fallback = err?.response?.message || err?.message || "Something went wrong saving your application.";
   const data = err?.response?.data;
-  if (!data || Object.keys(data).length === 0) {
-    return err?.response?.message || err?.message || "Something went wrong saving your application.";
-  }
+  if (!data || Object.keys(data).length === 0) return [fallback];
 
-  const details = Object.entries(data)
-    .map(([field, value]) => `${field}: ${value?.message || "invalid value"}`)
-    .join(" ");
-
-  return details || err?.response?.message || "Something went wrong saving your application.";
+  const details = Object.entries(data).map(
+    ([field, value]) => `${FIELD_LABELS[field] ?? field}: ${value?.message || "invalid value"}`,
+  );
+  return details.length > 0 ? details : [fallback];
 }
 
 const shortDate = formatDate;
@@ -379,6 +395,7 @@ function ApplicationCard({ application, onEdit, onDelete }) {
 }
 
 export default function MyApplication() {
+  usePageTitle("My timeline");
   const { user } = useAuth();
   const [applicationsState, setApplicationsState] = useState(null);
   const [loadError, setLoadError] = useState("");
@@ -387,7 +404,8 @@ export default function MyApplication() {
   const [form, setForm] = useState(emptyForm);
   const [formBaseline, setFormBaseline] = useState(null);
   const [status, setStatus] = useState("");
-  const [validationError, setValidationError] = useState("");
+  const [validationErrors, setValidationErrors] = useState([]);
+  const validationRef = useRef(null);
 
   const loadApplications = useCallback(async (signal) => {
     try {
@@ -452,7 +470,7 @@ export default function MyApplication() {
     setFormBaseline(JSON.stringify(nextForm));
     setEditingId(null);
     setStatus("");
-    setValidationError("");
+    setValidationErrors([]);
     setShowForm(true);
   }
 
@@ -463,7 +481,7 @@ export default function MyApplication() {
     setFormBaseline(JSON.stringify(nextForm));
     setEditingId(record.id);
     setStatus("");
-    setValidationError("");
+    setValidationErrors([]);
     setShowForm(true);
   }
 
@@ -487,16 +505,16 @@ export default function MyApplication() {
     setShowForm(false);
     setEditingId(null);
     setFormBaseline(null);
-    setValidationError("");
+    setValidationErrors([]);
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
-    setValidationError("");
+    setValidationErrors([]);
 
     if (!pb.authStore.isValid || !user?.id) {
       setStatus("error");
-      setValidationError("Please log in again before saving your application.");
+      setValidationErrors(["Please log in again before saving your application."]);
       return;
     }
 
@@ -508,29 +526,28 @@ export default function MyApplication() {
       ["nsf_email_date", "NSF email date"],
       ["decision_date", "Decision date"],
     ];
+    // Collect every failed check so the user fixes the form in one pass.
+    const problems = [];
     const today = localToday();
-    const futureField = datedFields.find(([field]) => form[field] > today);
-    if (futureField) {
-      setValidationError(`${futureField[1]} cannot be in the future.`);
-      return;
+    for (const [field, label] of datedFields) {
+      if (form[field] > today) problems.push(`${label} cannot be in the future.`);
     }
     if (form.biometrics_date && form.application_date > form.biometrics_date) {
-      setValidationError("Biometrics date cannot be before the application date.");
-      return;
+      problems.push("Biometrics date cannot be before the application date.");
     }
-    const invalidMilestone = datedFields
-      .slice(2)
-      .find(([field]) => form[field] && form.biometrics_date && form[field] < form.biometrics_date);
-    if (invalidMilestone) {
-      setValidationError(`${invalidMilestone[1]} cannot be before biometrics.`);
-      return;
+    for (const [field, label] of datedFields.slice(2)) {
+      if (form[field] && form.biometrics_date && form[field] < form.biometrics_date) {
+        problems.push(`${label} cannot be before biometrics.`);
+      }
     }
     if (form.outcome === "pending" && form.decision_date) {
-      setValidationError("Remove the decision date or change the outcome.");
-      return;
+      problems.push("Remove the decision date or change the outcome.");
     }
     if (form.outcome !== "pending" && !form.decision_date) {
-      setValidationError("Add the decision date for an approved or rejected application.");
+      problems.push("Add the decision date for an approved or rejected application.");
+    }
+    if (problems.length > 0) {
+      setValidationErrors(problems);
       return;
     }
 
@@ -550,9 +567,24 @@ export default function MyApplication() {
     } catch (err) {
       console.error("Application save failed", err);
       setStatus("error");
-      setValidationError(validationMessage(err));
+      setValidationErrors(validationMessages(err));
     }
   }
+
+  // Bring the error summary into view when a submit fails — the form is tall
+  // enough that errors rendered off-screen read as "nothing happened".
+  useEffect(() => {
+    if (validationErrors.length === 0) return;
+    validationRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    validationRef.current?.focus({ preventScroll: true });
+  }, [validationErrors]);
+
+  // Auto-dismiss the save confirmation.
+  useEffect(() => {
+    if (status !== "saved") return undefined;
+    const timer = setTimeout(() => setStatus(""), 4000);
+    return () => clearTimeout(timer);
+  }, [status]);
 
   return (
     <div className="my-applications-page">
@@ -568,6 +600,12 @@ export default function MyApplication() {
           </button>
         )}
       </div>
+
+      {status === "saved" && (
+        <p className="success-text" role="status">
+          Application saved.
+        </p>
+      )}
 
       {applications && (
         <ClaimCallout
@@ -625,6 +663,16 @@ export default function MyApplication() {
         <div className="form-card application-form">
           <h3>{editingId ? "Edit application" : "New application"}</h3>
           <p className="optional-hint">Fields marked * are required.</p>
+          {validationErrors.length > 0 && (
+            <div className="form-error-summary" role="alert" tabIndex={-1} ref={validationRef}>
+              <strong>Please fix the following:</strong>
+              <ul>
+                {validationErrors.map((message) => (
+                  <li key={message}>{message}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <form onSubmit={handleSubmit}>
             <label>
               Link to your r/SpouseVisaUk post (optional, public)
@@ -743,11 +791,9 @@ export default function MyApplication() {
               />
             </label>
 
-            {validationError && <p className="error-text">{validationError}</p>}
-
             <div style={{ display: "flex", gap: 12 }}>
               <button type="submit" disabled={status === "saving"}>
-                {editingId ? "Update" : "Submit"}
+                {status === "saving" ? "Saving…" : editingId ? "Update" : "Submit"}
               </button>
               <button type="button" className="link-button" onClick={cancelForm}>
                 Cancel
@@ -757,7 +803,6 @@ export default function MyApplication() {
         </div>
       )}
 
-      {status === "saved" && !showForm && <p className="success-text">Saved.</p>}
     </div>
   );
 }
