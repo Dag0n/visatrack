@@ -4,10 +4,10 @@ import { pb } from "../lib/pb";
 import { useAuth } from "../lib/auth.jsx";
 import CountrySelect from "../components/CountrySelect";
 import { fetchCustom, isAbortError } from "../lib/api";
-import { formatDate, localToday, stripRedditPrefix } from "../lib/format";
+import { formatApprovalRate, formatDate, localToday, stripRedditPrefix } from "../lib/format";
 import { PRIORITY_LABELS, VISA_TYPE_LABELS } from "../lib/labels";
 import { usePageTitle } from "../lib/usePageTitle";
-import { processingStartDate, workingDaysBetween } from "../lib/processingDays";
+import { addWorkingDays, processingStartDate, workingDaysBetween } from "../lib/processingDays";
 import StatusBadge from "../components/StatusBadge";
 
 const emptyForm = {
@@ -182,6 +182,12 @@ function CohortInsight({ application }) {
   if (!cohort) return <div className="cohort-empty">Building your comparison…</div>;
 
   const progress = Math.min(100, Math.round((elapsed / Math.max(cohort.upperQuartile, 1)) * 100));
+  const isPending = !application.decision_date;
+  const windowStart = start ? addWorkingDays(start, Math.round(cohort.lowerQuartile)) : null;
+  const windowEnd = start ? addWorkingDays(start, Math.round(cohort.upperQuartile)) : null;
+  const pastMedian = isPending && elapsed > cohort.medianDays;
+  const recent = (cohort.recent ?? []).filter((c) => c.redditPostUrl);
+
   return (
     <div className="cohort-insight">
       <div className="cohort-topline">
@@ -202,12 +208,34 @@ function CohortInsight({ application }) {
         <span>Middle half: {cohort.lowerQuartile}–{cohort.upperQuartile} WD</span>
         <strong>Median {cohort.medianDays} WD</strong>
       </div>
+      {isPending && windowStart && windowEnd && (
+        <p className="cohort-window">
+          The middle half of similar cases were decided between{" "}
+          <strong>{formatDate(windowStart)}</strong> and <strong>{formatDate(windowEnd)}</strong>{" "}
+          counted from your Day 1.
+          {pastMedian ? " You're past the cohort median — many similar waits still resolved within the upper range." : ""}
+        </p>
+      )}
       <p>
         Based on {cohort.count} reported completed {PRIORITY_LABELS[application.priority_service]?.toLowerCase()}{" "}
         {VISA_TYPE_LABELS[application.visa_type]?.toLowerCase()} cases decided in the last 12 months
-        {cohort.scope === "country" ? ` from ${cohort.country}` : " across all countries"}. Only cases
-        with a reported outcome are included; this is not a forecast.
+        {cohort.scope === "country" ? ` from ${cohort.country}` : " across all countries"}
+        {cohort.count > 0 ? `, ${formatApprovalRate(cohort.approved, cohort.count)} of them approved` : ""}.
+        Only cases with a reported outcome are included; this is not a forecast.
       </p>
+      {recent.length > 0 && (
+        <p className="cohort-recent">
+          Read similar timelines:{" "}
+          {recent.map((c, index) => (
+            <span key={c.redditPostUrl}>
+              {index > 0 && " · "}
+              <a href={c.redditPostUrl} target="_blank" rel="noreferrer">
+                {Math.round(c.days)} WD, {c.outcome}
+              </a>
+            </span>
+          ))}
+        </p>
+      )}
     </div>
   );
 }

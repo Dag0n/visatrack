@@ -34,6 +34,19 @@ export function calendarDaysBetween(from, to) {
   return Math.max(0, Math.round(diff / (1000 * 60 * 60 * 24)));
 }
 
+// The calendar date of the nth working day counting the start date (when it
+// is a working day) as day 1 — used to turn cohort quartiles into real dates.
+export function addWorkingDays(start, workingDays) {
+  const d = parseUTCDate(start);
+  if (workingDays <= 1 && !isNonWorkingDay(d)) return d;
+  let count = isNonWorkingDay(d) ? 0 : 1;
+  while (count < workingDays) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    if (!isNonWorkingDay(d)) count++;
+  }
+  return d;
+}
+
 export function workingDaysBetween(from, to) {
   let count = 0;
   const cur = parseUTCDate(from);
