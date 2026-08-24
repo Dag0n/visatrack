@@ -1,6 +1,8 @@
 import { Component, lazy, Suspense, useState } from "react";
-import { Navigate, NavLink, Outlet, useLocation, useParams } from "react-router-dom";
+import { Navigate, NavLink, Outlet, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "./lib/auth.jsx";
+import { usePageTitle } from "./lib/usePageTitle";
+import ScrollToTop from "./components/ScrollToTop";
 import logo from "./assets/logo-header.webp";
 import "./App.css";
 
@@ -47,6 +49,20 @@ function CountryStatsRoute() {
   return <CountryStats key={country} />;
 }
 
+function NotFound() {
+  usePageTitle("Page not found");
+  return (
+    <div className="page-heading">
+      <div>
+        <h1>Page not found</h1>
+        <p>
+          That page doesn't exist. <NavLink to="/">Back to the dashboard</NavLink>.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // Route objects live beside the lazy page declarations they use.
 // eslint-disable-next-line react-refresh/only-export-components
 export const appRoutes = [
@@ -72,25 +88,14 @@ export const appRoutes = [
       </ProtectedRoute>
     ),
   },
-  {
-    path: "*",
-    element: (
-      <div className="page-heading">
-        <div>
-          <h1>Page not found</h1>
-          <p>
-            That page doesn't exist. <NavLink to="/">Back to the dashboard</NavLink>.
-          </p>
-        </div>
-      </div>
-    ),
-  },
+  { path: "*", element: <NotFound /> },
 ];
 
 export default function App() {
   const { isLoggedIn, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
 
   function closeMenu() {
     setMenuOpen(false);
@@ -98,6 +103,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <ScrollToTop />
       <header className="app-header">
         <div className="app-header-inner">
           <NavLink to="/" className="logo-link" onClick={closeMenu} aria-label="VisaTrack UK home">
@@ -135,6 +141,7 @@ export default function App() {
                   onClick={() => {
                     logout();
                     closeMenu();
+                    navigate("/");
                   }}
                 >
                   Log out

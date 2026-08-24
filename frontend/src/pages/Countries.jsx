@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { fetchCustom, isAbortError } from "../lib/api";
+import { usePageTitle } from "../lib/usePageTitle";
 import CountryTable from "../components/CountryTable";
 
 export default function Countries() {
+  usePageTitle("Countries");
   const [stats, setStats] = useState(null);
   const [error, setError] = useState("");
   const [countryPriority, setCountryPriority] = useState("none");

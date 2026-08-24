@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth.jsx";
+import { usePageTitle } from "../lib/usePageTitle";
 
 function GoogleLogo() {
   return (
@@ -41,6 +42,7 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  usePageTitle("Log in");
   const [submitting, setSubmitting] = useState(false);
   const { login, signup, loginWithOAuth2 } = useAuth();
   const navigate = useNavigate();

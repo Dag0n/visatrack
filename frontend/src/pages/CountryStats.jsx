@@ -4,6 +4,7 @@ import { fetchCustom, isAbortError } from "../lib/api";
 import { PRIORITY_FILTER_OPTIONS, VISA_TYPE_LABELS } from "../lib/labels";
 import { CHART_PRIMARY, LOW_SAMPLE, SERIES_COLORS } from "../lib/chartTheme";
 import { formatApprovalRate, formatMonth, formatRateValue, round1 } from "../lib/format";
+import { usePageTitle } from "../lib/usePageTitle";
 import FilterButtonGroup from "../components/FilterButtonGroup";
 import StatCards from "../components/StatCards";
 import StatLineChart from "../components/StatLineChart";
@@ -74,6 +75,7 @@ function Chart({ data, hiddenLines, lines, lineLabel, yLabel, allowDecimals = tr
 export default function CountryStats() {
   const { country } = useParams();
   const countryName = decodeURIComponent(country);
+  usePageTitle(countryName);
 
   const [rows, setRows] = useState(null);
   const [months, setMonths] = useState([]);

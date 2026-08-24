@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchCustom, isAbortError } from "../lib/api";
 import { CHART_COMPARE, CHART_PRIMARY, LOW_SAMPLE } from "../lib/chartTheme";
 import { formatRateValue } from "../lib/format";
+import { usePageTitle } from "../lib/usePageTitle";
 import FilterButtonGroup from "../components/FilterButtonGroup";
 import StatLineChart from "../components/StatLineChart";
 
@@ -31,6 +32,7 @@ const CHART_MODES = [
 ];
 
 export default function PartnerVisaStats() {
+  usePageTitle("Approval rates");
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [selectedCountry, setSelectedCountry] = useState("");

@@ -2,8 +2,10 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth.jsx";
 import { stripRedditPrefix } from "../lib/format";
+import { usePageTitle } from "../lib/usePageTitle";
 
 export default function Settings() {
+  usePageTitle("Settings");
   const { user, updateProfile, deleteAccount, claimEntries } = useAuth();
   const [redditUsername, setRedditUsername] = useState(user.reddit_username || "");
   const [status, setStatus] = useState("");
