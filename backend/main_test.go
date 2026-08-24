@@ -145,3 +145,26 @@ func TestSummariseExplorerRowsSeparatesPendingAndCompleted(t *testing.T) {
 		t.Fatalf("completed summary = %#v", summary.Completed)
 	}
 }
+
+func TestCalendarDaysBetween(t *testing.T) {
+	tests := []struct {
+		name   string
+		from   string
+		to     string
+		want   float64
+		wantOK bool
+	}{
+		{name: "one week", from: "2026-05-01 00:00:00.000Z", to: "2026-05-08 00:00:00.000Z", want: 7, wantOK: true},
+		{name: "same day", from: "2026-05-01 00:00:00.000Z", to: "2026-05-01 00:00:00.000Z", want: 0, wantOK: true},
+		{name: "negative gap preserved", from: "2026-05-02 00:00:00.000Z", to: "2026-05-01 00:00:00.000Z", want: -1, wantOK: true},
+		{name: "missing endpoint", from: "", to: "2026-05-01 00:00:00.000Z", want: 0, wantOK: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := calendarDaysBetween(tc.from, tc.to)
+			if ok != tc.wantOK || got != tc.want {
+				t.Fatalf("calendarDaysBetween(%q, %q) = %v, %v; want %v, %v", tc.from, tc.to, got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}

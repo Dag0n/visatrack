@@ -42,13 +42,32 @@ type monthStat struct {
 	UpperQuartile float64 `json:"upperQuartile"`
 }
 
+// bioWaitStat summarises the calendar-day gap between applying and the
+// biometrics appointment — a funnel stage distinct from processing time.
+type bioWaitStat struct {
+	Count      int     `json:"count"`
+	MedianDays float64 `json:"medianDays"`
+	AvgDays    float64 `json:"avgDays"`
+}
+
+// milestoneImpactStat compares processing time between decided cases that hit
+// a milestone (RFI, NSF email) and those that did not.
+type milestoneImpactStat struct {
+	WithMedian    float64 `json:"withMedian"`
+	WithoutMedian float64 `json:"withoutMedian"`
+	WithCount     int     `json:"withCount"`
+	WithoutCount  int     `json:"withoutCount"`
+}
+
 type statsResponse struct {
-	Total      int                    `json:"total"`
-	Outcomes   map[string]int         `json:"outcomes"`
-	ByVisaType map[string][]groupStat `json:"byVisaType"`
-	ByPriority map[string][]groupStat `json:"byPriority"`
-	ByCountry  []countryStat          `json:"byCountry"`
-	ByMonth    map[string][]monthStat `json:"byMonth"`
+	Total           int                            `json:"total"`
+	Outcomes        map[string]int                 `json:"outcomes"`
+	ByVisaType      map[string][]groupStat         `json:"byVisaType"`
+	ByPriority      map[string][]groupStat         `json:"byPriority"`
+	ByCountry       []countryStat                  `json:"byCountry"`
+	ByMonth         map[string][]monthStat         `json:"byMonth"`
+	BioWait         bioWaitStat                    `json:"bioWait"`
+	MilestoneImpact map[string]milestoneImpactStat `json:"milestoneImpact"`
 }
 
 type countryMonthRow struct {
@@ -63,15 +82,17 @@ type countryMonthRow struct {
 // countryPrioritySummary is an all-time rollup of one country's applications
 // for one priority-service key ("all" plus each service level).
 type countryPrioritySummary struct {
-	Total         int     `json:"total"`
-	Pending       int     `json:"pending"`
-	Decided       int     `json:"decided"`
-	Approved      int     `json:"approved"`
-	Measured      int     `json:"measured"`
-	AvgDays       float64 `json:"avgDays"`
-	MedianDays    float64 `json:"medianDays"`
-	LowerQuartile float64 `json:"lowerQuartile"`
-	UpperQuartile float64 `json:"upperQuartile"`
+	Total             int     `json:"total"`
+	Pending           int     `json:"pending"`
+	Decided           int     `json:"decided"`
+	Approved          int     `json:"approved"`
+	Measured          int     `json:"measured"`
+	AvgDays           float64 `json:"avgDays"`
+	MedianDays        float64 `json:"medianDays"`
+	LowerQuartile     float64 `json:"lowerQuartile"`
+	UpperQuartile     float64 `json:"upperQuartile"`
+	BioWaitCount      int     `json:"bioWaitCount"`
+	MedianBioWaitDays float64 `json:"medianBioWaitDays"`
 }
 
 type countryStatsResponse struct {
@@ -87,6 +108,7 @@ type rawCountryApp struct {
 	VisaType        string `db:"visa_type"`
 	PriorityService string `db:"priority_service"`
 	Outcome         string `db:"outcome"`
+	ApplicationDate string `db:"application_date"`
 	BiometricsDate  string `db:"biometrics_date"`
 	DecisionDate    string `db:"decision_date"`
 }
@@ -149,14 +171,23 @@ func recentMonthWindow(now time.Time, count int) ([]string, time.Time) {
 	return months, cutoff
 }
 
+type cohortRecentCase struct {
+	DecisionDate  string  `json:"decisionDate"`
+	Days          float64 `json:"days"`
+	Outcome       string  `json:"outcome"`
+	RedditPostURL string  `json:"redditPostUrl"`
+}
+
 type cohortResponse struct {
-	Count         int     `json:"count"`
-	MedianDays    float64 `json:"medianDays"`
-	LowerQuartile float64 `json:"lowerQuartile"`
-	UpperQuartile float64 `json:"upperQuartile"`
-	DecidedByNow  int     `json:"decidedByNow"`
-	Scope         string  `json:"scope"`
-	Country       string  `json:"country"`
+	Count         int                `json:"count"`
+	Approved      int                `json:"approved"`
+	MedianDays    float64            `json:"medianDays"`
+	LowerQuartile float64            `json:"lowerQuartile"`
+	UpperQuartile float64            `json:"upperQuartile"`
+	DecidedByNow  int                `json:"decidedByNow"`
+	Scope         string             `json:"scope"`
+	Country       string             `json:"country"`
+	Recent        []cohortRecentCase `json:"recent"`
 }
 
 type rawCohortApp struct {
@@ -164,6 +195,8 @@ type rawCohortApp struct {
 	Country        string `db:"country"`
 	BiometricsDate string `db:"biometrics_date"`
 	DecisionDate   string `db:"decision_date"`
+	Outcome        string `db:"outcome"`
+	RedditPostURL  string `db:"reddit_post_url"`
 }
 
 // rollingWindows maps the window keys exposed to the frontend to how many
@@ -253,7 +286,7 @@ func main() {
 			// the 12-month decided window, while the summary rolls up all time.
 			var raw []rawCountryApp
 			err := e.App.DB().NewQuery(
-				`SELECT a.visa_type, a.priority_service, a.outcome, a.biometrics_date, a.decision_date
+				`SELECT a.visa_type, a.priority_service, a.outcome, a.application_date, a.biometrics_date, a.decision_date
 					 FROM applications a
 					 LEFT JOIN countries c ON c.id = a.country_id
 					 WHERE c.name = {:country}`,
@@ -275,12 +308,14 @@ func main() {
 			aggs := map[aggKey]*countryMonthAgg{}
 			summaries := map[string]*countryPrioritySummary{}
 			summaryAggs := map[string]*dayAgg{}
+			bioWaitAggs := map[string]*dayAgg{}
 
 			for _, r := range raw {
 				days, hasDays := processingDays(rawApplication{
 					BiometricsDate: r.BiometricsDate,
 					DecisionDate:   r.DecisionDate,
 				})
+				bioWait, hasBioWait := calendarDaysBetween(r.ApplicationDate, r.BiometricsDate)
 				decided := r.Outcome == "approved" || r.Outcome == "rejected"
 				approved := r.Outcome == "approved"
 
@@ -292,6 +327,12 @@ func main() {
 					s.Total++
 					if r.Outcome == "pending" {
 						s.Pending++
+					}
+					if hasBioWait {
+						if bioWaitAggs[key] == nil {
+							bioWaitAggs[key] = &dayAgg{}
+						}
+						bioWaitAggs[key].add(bioWait, false)
 					}
 					if decided {
 						s.Decided++
@@ -358,6 +399,10 @@ func main() {
 					s.MedianDays = math.Round(agg.median()*10) / 10
 					s.LowerQuartile = math.Round(percentile(sortedDays, 0.25)*10) / 10
 					s.UpperQuartile = math.Round(percentile(sortedDays, 0.75)*10) / 10
+				}
+				if agg := bioWaitAggs[key]; agg != nil {
+					s.BioWaitCount = agg.count
+					s.MedianBioWaitDays = math.Round(agg.median()*10) / 10
 				}
 				summary[key] = *s
 			}
@@ -760,6 +805,21 @@ type rawApplication struct {
 	ApplicationDate string `db:"application_date"`
 	BiometricsDate  string `db:"biometrics_date"`
 	DecisionDate    string `db:"decision_date"`
+	RfiDate         string `db:"rfi_date"`
+	NsfEmailDate    string `db:"nsf_email_date"`
+}
+
+// calendarDaysBetween returns whole calendar days between two stored dates.
+func calendarDaysBetween(fromStr, toStr string) (float64, bool) {
+	from, ok := parseDate(fromStr)
+	if !ok {
+		return 0, false
+	}
+	to, ok := parseDate(toStr)
+	if !ok {
+		return 0, false
+	}
+	return math.Round(to.Sub(from).Hours() / 24), true
 }
 
 func parseDate(s string) (time.Time, bool) {
@@ -902,7 +962,7 @@ func buildCohort(
 	cutoff := time.Now().AddDate(0, -12, 0).Format("2006-01-02")
 	var rows []rawCohortApp
 	err := app.DB().NewQuery(
-		`SELECT a.country_id, c.name as country, a.biometrics_date, a.decision_date
+		`SELECT a.country_id, c.name as country, a.biometrics_date, a.decision_date, a.outcome, a.reddit_post_url
 		 FROM applications a
 		 LEFT JOIN countries c ON c.id = a.country_id
 		 WHERE a.visa_type = {:visaType}
@@ -920,8 +980,8 @@ func buildCohort(
 	}
 
 	countryName := ""
-	exactDays := []float64{}
-	broaderDays := []float64{}
+	exactCases := []cohortRecentCase{}
+	broaderCases := []cohortRecentCase{}
 	for _, row := range rows {
 		days, ok := processingDays(rawApplication{
 			BiometricsDate: row.BiometricsDate,
@@ -930,29 +990,55 @@ func buildCohort(
 		if !ok {
 			continue
 		}
-		broaderDays = append(broaderDays, days)
+		decisionDay := row.DecisionDate
+		if len(decisionDay) > 10 {
+			decisionDay = decisionDay[:10]
+		}
+		c := cohortRecentCase{
+			DecisionDate:  decisionDay,
+			Days:          days,
+			Outcome:       row.Outcome,
+			RedditPostURL: row.RedditPostURL,
+		}
+		broaderCases = append(broaderCases, c)
 		if row.CountryID == countryID {
 			countryName = row.Country
-			exactDays = append(exactDays, days)
+			exactCases = append(exactCases, c)
 		}
 	}
 
 	scope := "country"
-	selected := exactDays
-	if len(selected) < 5 {
+	cases := exactCases
+	if len(cases) < 5 {
 		scope = "all_countries"
-		selected = broaderDays
+		cases = broaderCases
 	}
-	sort.Float64s(selected)
 
 	response := &cohortResponse{
-		Count:   len(selected),
+		Count:   len(cases),
 		Scope:   scope,
 		Country: countryName,
 	}
-	if len(selected) == 0 {
+	if len(cases) == 0 {
 		return response, nil
 	}
+
+	selected := make([]float64, 0, len(cases))
+	for _, c := range cases {
+		selected = append(selected, c.Days)
+		if c.Outcome == "approved" {
+			response.Approved++
+		}
+	}
+	sort.Float64s(selected)
+
+	// The freshest comparable decisions, so the user can read real write-ups.
+	sorted := append([]cohortRecentCase{}, cases...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].DecisionDate > sorted[j].DecisionDate })
+	if len(sorted) > 5 {
+		sorted = sorted[:5]
+	}
+	response.Recent = sorted
 
 	response.LowerQuartile = math.Round(percentile(selected, 0.25)*10) / 10
 	response.MedianDays = math.Round(percentile(selected, 0.5)*10) / 10
@@ -1013,7 +1099,7 @@ func buildStats(app core.App, countryPriority string) (*statsResponse, error) {
 
 	var rows []rawApplication
 	if err := app.DB().NewQuery(
-		`SELECT c.name as country, a.visa_type, a.priority_service, a.outcome, a.application_date, a.biometrics_date, a.decision_date
+		`SELECT c.name as country, a.visa_type, a.priority_service, a.outcome, a.application_date, a.biometrics_date, a.decision_date, a.rfi_date, a.nsf_email_date
 		 FROM applications a
 		 LEFT JOIN countries c ON c.id = a.country_id`,
 	).All(&rows); err != nil {
@@ -1028,12 +1114,22 @@ func buildStats(app core.App, countryPriority string) (*statsResponse, error) {
 		"priority":       {},
 		"super_priority": {},
 	}
+	bioWaits := &dayAgg{}
+	impact := map[string]struct{ with, without *dayAgg }{
+		"rfi": {&dayAgg{}, &dayAgg{}},
+		"nsf": {&dayAgg{}, &dayAgg{}},
+	}
 
 	filterByCountryPriority := validPriorities[countryPriority]
 
 	for _, row := range rows {
 		resp.Outcomes[row.Outcome]++
 		resp.Total++
+
+		// Application → biometrics wait, for every application with both dates.
+		if wait, ok := calendarDaysBetween(row.ApplicationDate, row.BiometricsDate); ok {
+			bioWaits.add(wait, false)
+		}
 
 		decided := row.Outcome == "approved" || row.Outcome == "rejected"
 		if !decided {
@@ -1045,6 +1141,17 @@ func buildStats(app core.App, countryPriority string) (*statsResponse, error) {
 			continue
 		}
 		approved := row.Outcome == "approved"
+
+		if row.RfiDate != "" {
+			impact["rfi"].with.add(days, approved)
+		} else {
+			impact["rfi"].without.add(days, approved)
+		}
+		if row.NsfEmailDate != "" {
+			impact["nsf"].with.add(days, approved)
+		} else {
+			impact["nsf"].without.add(days, approved)
+		}
 
 		decisionTime, ok := parseDate(row.DecisionDate)
 		if !ok {
@@ -1080,6 +1187,21 @@ func buildStats(app core.App, countryPriority string) (*statsResponse, error) {
 
 	resp.ByVisaType = groupByWindow(decidedEntries, func(e decidedEntry) string { return e.VisaType })
 	resp.ByPriority = groupByWindow(decidedEntries, func(e decidedEntry) string { return e.PriorityService })
+
+	resp.BioWait = bioWaitStat{
+		Count:      bioWaits.count,
+		MedianDays: math.Round(bioWaits.median()*10) / 10,
+		AvgDays:    math.Round(bioWaits.avg()*10) / 10,
+	}
+	resp.MilestoneImpact = map[string]milestoneImpactStat{}
+	for key, split := range impact {
+		resp.MilestoneImpact[key] = milestoneImpactStat{
+			WithMedian:    math.Round(split.with.median()*10) / 10,
+			WithoutMedian: math.Round(split.without.median()*10) / 10,
+			WithCount:     split.with.count,
+			WithoutCount:  split.without.count,
+		}
+	}
 
 	for key, agg := range byCountry {
 		resp.ByCountry = append(resp.ByCountry, countryStat{Key: key, Count: agg.count, AvgDays: agg.avg(), Approved: agg.approved})
