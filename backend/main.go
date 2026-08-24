@@ -75,9 +75,12 @@ type countryPrioritySummary struct {
 }
 
 type countryStatsResponse struct {
-	Country string                            `json:"country"`
-	Rows    []countryMonthRow                 `json:"rows"`
-	Summary map[string]countryPrioritySummary `json:"summary"`
+	Country            string                            `json:"country"`
+	Months             []string                          `json:"months"`
+	Rows               []countryMonthRow                 `json:"rows"`
+	Summary            map[string]countryPrioritySummary `json:"summary"`
+	Official           []partnerVisaStatRow              `json:"official"`
+	OfficialLatestYear int                               `json:"officialLatestYear"`
 }
 
 type rawCountryApp struct {
@@ -130,6 +133,20 @@ type partnerVisaStatsResponse struct {
 	SourceURL string               `json:"sourceUrl"`
 	Note      string               `json:"note"`
 	Rows      []partnerVisaStatRow `json:"rows"`
+}
+
+func recentMonthWindow(now time.Time, count int) ([]string, time.Time) {
+	if count < 1 {
+		return []string{}, time.Time{}
+	}
+
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	cutoff := monthStart.AddDate(0, -(count - 1), 0)
+	months := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		months = append(months, cutoff.AddDate(0, i, 0).Format("2006-01"))
+	}
+	return months, cutoff
 }
 
 type cohortResponse struct {
@@ -230,7 +247,7 @@ func main() {
 				return e.BadRequestError("country parameter is required", nil)
 			}
 
-			cutoff := time.Now().AddDate(0, -12, 0)
+			months, cutoff := recentMonthWindow(time.Now(), 12)
 
 			// All applications for the country: the monthly rows below keep
 			// the 12-month decided window, while the summary rolls up all time.
@@ -345,7 +362,34 @@ func main() {
 				summary[key] = *s
 			}
 
-			return e.JSON(http.StatusOK, countryStatsResponse{Country: country, Rows: rows, Summary: summary})
+			official := []partnerVisaStatRow{}
+			if err := e.App.DB().NewQuery(
+				`SELECT COALESCE(c.name, 'Other / unknown') AS country, s.year, s.issued, s.refused, s.withdrawn, s.lapsed
+					 FROM partner_visa_stats s
+					 LEFT JOIN countries c ON c.id = s.country
+					 WHERE c.name = {:country}
+					 ORDER BY s.year`,
+			).Bind(dbx.Params{"country": country}).All(&official); err != nil {
+				return e.InternalServerError("failed to query official country stats", err)
+			}
+
+			latest := struct {
+				Year int `db:"year"`
+			}{}
+			if err := e.App.DB().NewQuery(
+				`SELECT COALESCE(MAX(year), 0) AS year FROM partner_visa_stats`,
+			).One(&latest); err != nil {
+				return e.InternalServerError("failed to query latest official year", err)
+			}
+
+			return e.JSON(http.StatusOK, countryStatsResponse{
+				Country:            country,
+				Months:             months,
+				Rows:               rows,
+				Summary:            summary,
+				Official:           official,
+				OfficialLatestYear: latest.Year,
+			})
 		})
 
 		se.Router.GET("/api/custom/partner-visa-stats", func(e *core.RequestEvent) error {

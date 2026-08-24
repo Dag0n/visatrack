@@ -10,16 +10,6 @@ import StatLineChart from "../components/StatLineChart";
 
 const VISA_TYPES = Object.keys(VISA_TYPE_LABELS);
 
-function getLast12Months() {
-  const months = [];
-  const now = new Date();
-  for (let i = 11; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
-  }
-  return months;
-}
-
 function buildChartData(rows, months, priorityFilter) {
   return months.map((month) => {
     const relevant = rows.filter(
@@ -86,9 +76,12 @@ export default function CountryStats() {
   const countryName = decodeURIComponent(country);
 
   const [rows, setRows] = useState(null);
+  const [months, setMonths] = useState([]);
   const [summary, setSummary] = useState(null);
   const [officialRows, setOfficialRows] = useState(null);
+  const [officialLatestYear, setOfficialLatestYear] = useState(0);
   const [error, setError] = useState("");
+  const [retryKey, setRetryKey] = useState(0);
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [hiddenLines, setHiddenLines] = useState(new Set());
 
@@ -99,57 +92,42 @@ export default function CountryStats() {
     })
       .then((data) => {
         setRows(data.rows ?? []);
+        setMonths(data.months ?? []);
         setSummary(data.summary ?? null);
+        setOfficialRows(data.official ?? []);
+        setOfficialLatestYear(data.officialLatestYear ?? 0);
       })
       .catch((err) => {
         if (!isAbortError(err)) setError("Couldn't load country stats right now.");
       });
     return () => controller.abort();
-  }, [countryName]);
+  }, [countryName, retryKey]);
 
-  // Official Home Office figures for this nationality (best effort — the
-  // community charts render regardless).
-  useEffect(() => {
-    const controller = new AbortController();
-    fetchCustom("/partner-visa-stats", { signal: controller.signal })
-      .then((data) => setOfficialRows(data.rows ?? []))
-      .catch((err) => {
-        if (!isAbortError(err)) setOfficialRows([]);
-      });
-    return () => controller.abort();
-  }, []);
+  function retry() {
+    setRows(null);
+    setError("");
+    setRetryKey((key) => key + 1);
+  }
 
   const official = useMemo(() => {
     if (!officialRows?.length) return null;
-    const mine = officialRows.filter((r) => r.country === countryName);
-    if (!mine.length) return null;
-    const maxYear = Math.max(...officialRows.map((r) => r.year));
     let issued = 0;
     let refused = 0;
-    const points = [...mine]
+    const points = [...officialRows]
       .sort((a, b) => a.year - b.year)
       .map((r) => {
         issued += r.issued;
         refused += r.refused;
         const decided = r.issued + r.refused;
         return {
-          label: r.year === maxYear ? `${r.year} (Q1)` : String(r.year),
+          label: r.year === officialLatestYear ? `${r.year} (Q1)` : String(r.year),
           rate: decided ? Math.round((r.issued / decided) * 1000) / 10 : null,
           issued: r.issued,
           refused: r.refused,
         };
       });
     return { points, issued, refused, decided: issued + refused };
-  }, [officialRows, countryName]);
-
-  // Fixed 12-month window from the client clock, extended with any month the
-  // server returned outside it (the server applies its own cutoff, so the two
-  // can disagree near a month boundary).
-  const months = useMemo(() => {
-    const set = new Set(getLast12Months());
-    for (const r of rows ?? []) set.add(r.month);
-    return [...set].sort();
-  }, [rows]);
+  }, [officialRows, officialLatestYear]);
   const lines = ["all", ...VISA_TYPES];
 
   const built = useMemo(
@@ -189,8 +167,15 @@ export default function CountryStats() {
         </div>
       </div>
 
-      {error && <p className="empty-hint">{error}</p>}
-      {!error && !rows && <p className="empty-hint">Loading…</p>}
+      {error && (
+        <div className="inline-error" role="alert">
+          <span>{error}</span>
+          <button type="button" className="small-button" onClick={retry}>
+            Try again
+          </button>
+        </div>
+      )}
+      {!error && !rows && <p className="empty-hint" role="status">Loading country statistics…</p>}
 
       {!error && rows && (
         <>
@@ -199,6 +184,7 @@ export default function CountryStats() {
             value={priorityFilter}
             onChange={setPriorityFilter}
             style={{ marginBottom: 8 }}
+            label="Country service level"
           />
 
           {active && active.total > 0 && (
@@ -251,6 +237,8 @@ export default function CountryStats() {
               <button
                 key={key}
                 type="button"
+                aria-pressed={!hiddenLines.has(key)}
+                aria-label={`${hiddenLines.has(key) ? "Show" : "Hide"} ${lineLabel(key)} chart series`}
                 className={hiddenLines.has(key) ? "filter-button" : "filter-button active"}
                 style={{
                   borderColor: SERIES_COLORS[key],

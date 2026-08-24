@@ -65,6 +65,18 @@ func TestPercentileInterpolates(t *testing.T) {
 	}
 }
 
+func TestRecentMonthWindowUsesCalendarMonths(t *testing.T) {
+	now := time.Date(2026, time.August, 24, 15, 30, 0, 0, time.UTC)
+	months, cutoff := recentMonthWindow(now, 12)
+
+	if cutoff != time.Date(2025, time.September, 1, 0, 0, 0, 0, time.UTC) {
+		t.Fatalf("unexpected cutoff: %v", cutoff)
+	}
+	if len(months) != 12 || months[0] != "2025-09" || months[11] != "2026-08" {
+		t.Fatalf("unexpected months: %#v", months)
+	}
+}
+
 func TestParseExplorerFilters(t *testing.T) {
 	filters, err := parseExplorerFilters(url.Values{
 		"status":    {"all"},
