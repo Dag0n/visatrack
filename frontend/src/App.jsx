@@ -1,16 +1,17 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { NavLink, Route, Routes } from "react-router-dom";
 import { useAuth } from "./lib/auth.jsx";
-import Dashboard from "./pages/Dashboard";
-import Login from "./pages/Login";
-import MyApplication from "./pages/MyApplication";
-import Applications from "./pages/Applications";
-import Settings from "./pages/Settings";
-import CountryStats from "./pages/CountryStats";
-import Countries from "./pages/Countries";
-import PartnerVisaStats from "./pages/PartnerVisaStats";
-import logo from "./assets/logo.png";
+import logo from "./assets/logo-header.webp";
 import "./App.css";
+
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Login = lazy(() => import("./pages/Login"));
+const MyApplication = lazy(() => import("./pages/MyApplication"));
+const Applications = lazy(() => import("./pages/Applications"));
+const Settings = lazy(() => import("./pages/Settings"));
+const CountryStats = lazy(() => import("./pages/CountryStats"));
+const Countries = lazy(() => import("./pages/Countries"));
+const PartnerVisaStats = lazy(() => import("./pages/PartnerVisaStats"));
 
 function ProtectedRoute({ children }) {
   const { isLoggedIn } = useAuth();
@@ -77,30 +78,45 @@ export default function App() {
       </header>
 
       <main className="app-main">
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/applications" element={<Applications />} />
-          <Route path="/login" element={<Login />} />
-          <Route
-            path="/my-application"
-            element={
-              <ProtectedRoute>
-                <MyApplication />
-              </ProtectedRoute>
-            }
-          />
-          <Route path="/countries" element={<Countries />} />
-          <Route path="/country/:country" element={<CountryStats />} />
-          <Route path="/approval-rates" element={<PartnerVisaStats />} />
-          <Route
-            path="/settings"
-            element={
-              <ProtectedRoute>
-                <Settings />
-              </ProtectedRoute>
-            }
-          />
-        </Routes>
+        <Suspense fallback={<p className="empty-hint">Loading page…</p>}>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/applications" element={<Applications />} />
+            <Route path="/login" element={<Login />} />
+            <Route
+              path="/my-application"
+              element={
+                <ProtectedRoute>
+                  <MyApplication />
+                </ProtectedRoute>
+              }
+            />
+            <Route path="/countries" element={<Countries />} />
+            <Route path="/country/:country" element={<CountryStats />} />
+            <Route path="/approval-rates" element={<PartnerVisaStats />} />
+            <Route
+              path="/settings"
+              element={
+                <ProtectedRoute>
+                  <Settings />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="*"
+              element={
+                <div className="page-heading">
+                  <div>
+                    <h1>Page not found</h1>
+                    <p>
+                      That page doesn't exist. <NavLink to="/">Back to the dashboard</NavLink>.
+                    </p>
+                  </div>
+                </div>
+              }
+            />
+          </Routes>
+        </Suspense>
       </main>
 
       <footer className="app-footer">
