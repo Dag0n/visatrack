@@ -1,12 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { pb } from "../lib/pb";
+import { fetchCustom, isAbortError } from "../lib/api";
 import { useAuth } from "../lib/auth.jsx";
 import { PRIORITY_LABELS, VISA_TYPE_LABELS } from "../lib/labels";
-import { formatRedditUsername } from "../lib/format";
+import { formatRedditUsername, round1 } from "../lib/format";
 import { calendarDaysBetween, processingStartDate, workingDaysBetween } from "../lib/processingDays";
+import FilterButtonGroup from "../components/FilterButtonGroup";
+import StatCards from "../components/StatCards";
 import StatusBadge from "../components/StatusBadge";
 
 const PER_PAGE = 20;
+const COUNTRY_DEBOUNCE_MS = 300;
+const LIST_REQUEST_KEY = "applications-explorer-list";
+const OWN_ITEMS_REQUEST_KEY = "applications-explorer-own-items";
 
 const FILTERS = [
   { value: "pending", label: "In progress" },
@@ -49,24 +56,113 @@ const SORT_OPTIONS = [
   { value: "decision_date", label: "Oldest decision first" },
 ];
 
+// URL query params double as the filter state so views can be linked,
+// bookmarked, and undone with the back button. Defaults stay out of the URL.
+const PARAM_DEFAULTS = {
+  status: "pending",
+  visa: "all",
+  service: "all",
+  milestone: "all",
+  country: "",
+  bioFrom: "",
+  bioTo: "",
+  sort: "-application_date",
+};
+
+function optionParam(searchParams, key, options) {
+  const value = searchParams.get(key);
+  return options.some((option) => option.value === value) ? value : PARAM_DEFAULTS[key];
+}
+
+function dateParam(searchParams, key) {
+  const value = searchParams.get(key);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value ?? "")) return PARAM_DEFAULTS[key];
+
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
+    ? value
+    : PARAM_DEFAULTS[key];
+}
+
+function pageParam(value) {
+  if (value === null) return { page: 1, isCanonical: true };
+
+  const parsed = Number(value);
+  const isValid = Number.isSafeInteger(parsed) && parsed >= 1;
+  return {
+    page: isValid ? parsed : 1,
+    isCanonical: isValid && parsed > 1 && value === String(parsed),
+  };
+}
+
+function useDebouncedValue(value, delay) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setDebouncedValue(value), delay);
+    return () => window.clearTimeout(timeoutId);
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
 function ownComboKey(item) {
   return `${item.country_id}::${item.visa_type}::${item.priority_service}`;
 }
 
-function average(values) {
-  if (values.length === 0) return null;
-  return values.reduce((sum, v) => sum + v, 0) / values.length;
+function formatWorkingDays(value, measured) {
+  return measured > 0 ? `${round1(value)} WD` : "—";
 }
 
-function median(values) {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
-}
+function summaryPresentation(summary, status) {
+  if (status === "pending") {
+    return {
+      items: [
+        { value: summary.total, label: "Matching timelines" },
+        {
+          value: formatWorkingDays(summary.pending.median, summary.pending.measured),
+          label: "Median current wait",
+        },
+        {
+          value: formatWorkingDays(summary.pending.average, summary.pending.measured),
+          label: "Average current wait",
+        },
+      ],
+      footnote: `${summary.pending.measured} pending entries have biometrics dates to measure.`,
+    };
+  }
 
-function round1(n) {
-  return Math.round(n * 10) / 10;
+  if (status === "approved" || status === "rejected") {
+    return {
+      items: [
+        { value: summary.total, label: "Matching timelines" },
+        {
+          value: formatWorkingDays(summary.completed.median, summary.completed.measured),
+          label: "Median processing time",
+        },
+        {
+          value: formatWorkingDays(summary.completed.average, summary.completed.measured),
+          label: "Average processing time",
+        },
+      ],
+      footnote: `${summary.completed.measured} completed entries have biometrics and decision dates to measure.`,
+    };
+  }
+
+  return {
+    items: [
+      { value: summary.total, label: "Matching timelines" },
+      {
+        value: formatWorkingDays(summary.completed.median, summary.completed.measured),
+        label: "Completed median",
+      },
+      {
+        value: formatWorkingDays(summary.pending.median, summary.pending.measured),
+        label: "Pending median wait",
+      },
+    ],
+    footnote: `${summary.completed.measured} completed and ${summary.pending.measured} pending entries have enough dates to measure.`,
+  };
 }
 
 function DaysCell({ start, end }) {
@@ -84,24 +180,53 @@ function DaysCell({ start, end }) {
 
 function processingEnd(item) {
   if (item.outcome === "pending") return new Date();
-  return item.decision_date ? new Date(item.decision_date) : null;
+  return item.decision_date || null;
 }
 
 export default function Applications() {
   const { user, isLoggedIn } = useAuth();
-  const [filter, setFilter] = useState("pending");
-  const [visaType, setVisaType] = useState("all");
-  const [priority, setPriority] = useState("all");
-  const [milestone, setMilestone] = useState("all");
-  const [country, setCountry] = useState("");
-  const [bioFrom, setBioFrom] = useState("");
-  const [bioTo, setBioTo] = useState("");
-  const [sort, setSort] = useState("-application_date");
-  const [page, setPage] = useState(1);
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState("");
-  const [summary, setSummary] = useState(null);
-  const [ownItems, setOwnItems] = useState([]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [resultState, setResultState] = useState(null);
+  const [errorState, setErrorState] = useState(null);
+  const [summaryState, setSummaryState] = useState(null);
+  const [ownItemsState, setOwnItemsState] = useState(null);
+
+  const filter = optionParam(searchParams, "status", FILTERS);
+  const visaType = optionParam(searchParams, "visa", VISA_TYPE_FILTERS);
+  const priority = optionParam(searchParams, "service", PRIORITY_FILTERS);
+  const milestone = optionParam(searchParams, "milestone", MILESTONE_FILTERS);
+  const country = searchParams.get("country") ?? PARAM_DEFAULTS.country;
+  const debouncedCountry = useDebouncedValue(country, COUNTRY_DEBOUNCE_MS);
+  const bioFrom = dateParam(searchParams, "bioFrom");
+  const bioTo = dateParam(searchParams, "bioTo");
+  const dateRangeIsValid = !bioFrom || !bioTo || bioFrom <= bioTo;
+  const dateRangeError = dateRangeIsValid
+    ? ""
+    : "The biometrics ‘from’ date must be on or before the ‘to’ date.";
+  const sort = optionParam(searchParams, "sort", SORT_OPTIONS);
+  const { page, isCanonical: pageIsCanonical } = pageParam(searchParams.get("page"));
+
+  function setParam(key, value, { replace = false } = {}) {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (value === PARAM_DEFAULTS[key]) next.delete(key);
+        else next.set(key, value);
+        next.delete("page");
+        return next;
+      },
+      { replace },
+    );
+  }
+
+  function setPage(value) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value <= 1) next.delete("page");
+      else next.set("page", String(value));
+      return next;
+    });
+  }
 
   const hasExtraFilters =
     priority !== "all" || milestone !== "all" || bioFrom !== "" || bioTo !== "";
@@ -112,82 +237,165 @@ export default function Applications() {
     if (visaType !== "all") clauses.push(pb.filter("visa_type = {:visaType}", { visaType }));
     if (priority !== "all") clauses.push(pb.filter("priority_service = {:priority}", { priority }));
     if (milestone !== "all") clauses.push(MILESTONE_CLAUSES[milestone]);
-    if (country.trim()) clauses.push(pb.filter("country_id.name ~ {:country}", { country: country.trim() }));
+    if (debouncedCountry.trim()) {
+      clauses.push(pb.filter("country_id.name ~ {:country}", { country: debouncedCountry.trim() }));
+    }
     if (bioFrom) clauses.push(pb.filter("biometrics_date >= {:from}", { from: `${bioFrom} 00:00:00.000Z` }));
     if (bioTo) clauses.push(pb.filter("biometrics_date <= {:to}", { to: `${bioTo} 23:59:59.999Z` }));
     return clauses.join(" && ");
-  }, [filter, visaType, priority, milestone, country, bioFrom, bioTo]);
+  }, [filter, visaType, priority, milestone, debouncedCountry, bioFrom, bioTo]);
+
+  const summaryQuery = useMemo(() => {
+    const params = new URLSearchParams({
+      status: filter,
+      visa: visaType,
+      service: priority,
+      milestone,
+    });
+    if (debouncedCountry.trim()) params.set("country", debouncedCountry.trim());
+    if (bioFrom) params.set("bioFrom", bioFrom);
+    if (bioTo) params.set("bioTo", bioTo);
+    return params.toString();
+  }, [filter, visaType, priority, milestone, debouncedCountry, bioFrom, bioTo]);
+
+  // Secondary sort key so records with an empty sort field (e.g. pending rows
+  // sorted by decision date) keep a deterministic order.
+  const pbSort = sort.includes("application_date") ? sort : `${sort},-application_date`;
+  const effectiveFilterKey = JSON.stringify([
+    filter,
+    visaType,
+    priority,
+    milestone,
+    debouncedCountry.trim(),
+    bioFrom,
+    bioTo,
+  ]);
+  const visibleFilterKey = JSON.stringify([
+    filter,
+    visaType,
+    priority,
+    milestone,
+    country.trim(),
+    bioFrom,
+    bioTo,
+  ]);
+  const listRequestKey = JSON.stringify([effectiveFilterKey, page, pbSort]);
+  const listVisibleKey = JSON.stringify([visibleFilterKey, page, pbSort]);
+  const result = resultState?.queryKey === listVisibleKey ? resultState.data : null;
+  const error = errorState?.queryKey === listVisibleKey ? errorState.message : "";
+  const summary = summaryState?.queryKey === visibleFilterKey ? summaryState.data : null;
 
   function clearExtraFilters() {
-    setPriority("all");
-    setMilestone("all");
-    setBioFrom("");
-    setBioTo("");
-    setPage(1);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      for (const key of ["service", "milestone", "bioFrom", "bioTo", "page"]) next.delete(key);
+      return next;
+    });
   }
 
   useEffect(() => {
+    if (!dateRangeIsValid) return undefined;
+
+    let ignore = false;
+
     pb.collection("applications")
       .getList(page, PER_PAGE, {
         filter: pbFilter,
-        sort,
+        sort: pbSort,
         expand: "country_id",
-        requestKey: null,
+        requestKey: LIST_REQUEST_KEY,
       })
-      .then(setResult)
+      .then((data) => {
+        if (ignore) return;
+
+        const lastPage = Math.max(1, data.totalPages);
+        if (!pageIsCanonical || page > lastPage) {
+          const safePage = Math.min(page, lastPage);
+          setSearchParams(
+            (prev) => {
+              const next = new URLSearchParams(prev);
+              if (safePage <= 1) next.delete("page");
+              else next.set("page", String(safePage));
+              return next;
+            },
+            { replace: true },
+          );
+          return;
+        }
+
+        setErrorState(null);
+        setResultState({ queryKey: listRequestKey, data });
+      })
       .catch((err) => {
-        if (err?.isAbort) return;
-        setError("Couldn't load applications right now.");
+        if (ignore || err?.isAbort) return;
+        setResultState({ queryKey: listRequestKey, data: null });
+        setErrorState({
+          queryKey: listRequestKey,
+          message: "Couldn't load applications right now.",
+        });
       });
-  }, [page, pbFilter, sort]);
+
+    return () => {
+      ignore = true;
+      pb.cancelRequest(LIST_REQUEST_KEY);
+    };
+  }, [dateRangeIsValid, page, pageIsCanonical, pbFilter, pbSort, listRequestKey, setSearchParams]);
 
   useEffect(() => {
+    if (!dateRangeIsValid) return undefined;
+
+    const controller = new AbortController();
+    let ignore = false;
+
+    fetchCustom(`/application-summary?${summaryQuery}`, { signal: controller.signal })
+      .then((data) => {
+        if (ignore) return;
+        setSummaryState({ queryKey: effectiveFilterKey, data });
+      })
+      .catch((err) => {
+        if (ignore || isAbortError(err)) return;
+        setSummaryState({ queryKey: effectiveFilterKey, data: null });
+      });
+
+    return () => {
+      ignore = true;
+      controller.abort();
+    };
+  }, [dateRangeIsValid, summaryQuery, effectiveFilterKey]);
+
+  useEffect(() => {
+    const userId = user?.id;
+    if (!isLoggedIn || !userId) return undefined;
+
+    let ignore = false;
+
     pb.collection("applications")
       .getFullList({
-        filter: pbFilter,
-        fields: "biometrics_date,decision_date,outcome",
-        requestKey: null,
+        filter: pb.filter("user = {:userId}", { userId }),
+        fields: "country_id,visa_type,priority_service",
+        requestKey: OWN_ITEMS_REQUEST_KEY,
       })
       .then((items) => {
-        const workingDays = items
-          .map((item) => {
-            const start = processingStartDate(item);
-            const end = processingEnd(item);
-            return start && end ? workingDaysBetween(start, end) : null;
-          })
-          .filter((days) => days !== null);
-        setSummary({
-          total: items.length,
-          measured: workingDays.length,
-          avgWD: average(workingDays),
-          medianWD: median(workingDays),
-        });
+        if (ignore) return;
+        setOwnItemsState({ userId, items });
       })
       .catch((err) => {
-        if (err?.isAbort) return;
-        setSummary(null);
+        if (ignore || err?.isAbort) return;
+        setOwnItemsState({ userId, items: [] });
       });
-  }, [pbFilter]);
 
-  useEffect(() => {
-    if (!isLoggedIn) return;
-    pb.collection("applications")
-      .getFullList({
-        filter: pb.filter("user = {:userId}", { userId: user.id }),
-        fields: "country_id,visa_type,priority_service",
-        requestKey: null,
-      })
-      .then(setOwnItems)
-      .catch((err) => {
-        if (err?.isAbort) return;
-        setOwnItems([]);
-      });
+    return () => {
+      ignore = true;
+      pb.cancelRequest(OWN_ITEMS_REQUEST_KEY);
+    };
   }, [isLoggedIn, user?.id]);
 
   const ownCombos = useMemo(() => {
-    if (!isLoggedIn) return new Set();
-    return new Set(ownItems.map(ownComboKey));
-  }, [isLoggedIn, ownItems]);
+    if (!isLoggedIn || ownItemsState?.userId !== user?.id) return new Set();
+    return new Set(ownItemsState.items.map(ownComboKey));
+  }, [isLoggedIn, ownItemsState, user?.id]);
+
+  const presentedSummary = summary ? summaryPresentation(summary, filter) : null;
 
   return (
     <div className="applications-page">
@@ -203,21 +411,12 @@ export default function Applications() {
       </div>
 
       <div className="explorer-panel">
-        <div className="filter-row status-filters">
-          {FILTERS.map((f) => (
-            <button
-              key={f.value}
-              type="button"
-              className={filter === f.value ? "filter-button active" : "filter-button"}
-              onClick={() => {
-                setFilter(f.value);
-                setPage(1);
-              }}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
+        <FilterButtonGroup
+          className="status-filters"
+          options={FILTERS}
+          value={filter}
+          onChange={(value) => setParam("status", value)}
+        />
 
         <div className="filter-row explorer-controls">
           <input
@@ -225,18 +424,12 @@ export default function Applications() {
             className="table-search"
             placeholder="Search by country…"
             value={country}
-            onChange={(e) => {
-              setCountry(e.target.value);
-              setPage(1);
-            }}
+            onChange={(e) => setParam("country", e.target.value, { replace: true })}
           />
           <select
             aria-label="Visa type"
             value={visaType}
-            onChange={(e) => {
-              setVisaType(e.target.value);
-              setPage(1);
-            }}
+            onChange={(e) => setParam("visa", e.target.value)}
           >
             {VISA_TYPE_FILTERS.map((f) => (
               <option key={f.value} value={f.value}>
@@ -247,10 +440,7 @@ export default function Applications() {
           <select
             aria-label="Sort applications"
             value={sort}
-            onChange={(e) => {
-              setSort(e.target.value);
-              setPage(1);
-            }}
+            onChange={(e) => setParam("sort", e.target.value)}
           >
             {SORT_OPTIONS.map((s) => (
               <option key={s.value} value={s.value}>
@@ -264,10 +454,7 @@ export default function Applications() {
           <select
             aria-label="Priority service"
             value={priority}
-            onChange={(e) => {
-              setPriority(e.target.value);
-              setPage(1);
-            }}
+            onChange={(e) => setParam("service", e.target.value)}
           >
             {PRIORITY_FILTERS.map((f) => (
               <option key={f.value} value={f.value}>
@@ -278,10 +465,7 @@ export default function Applications() {
           <select
             aria-label="Milestone emails"
             value={milestone}
-            onChange={(e) => {
-              setMilestone(e.target.value);
-              setPage(1);
-            }}
+            onChange={(e) => setParam("milestone", e.target.value)}
           >
             {MILESTONE_FILTERS.map((f) => (
               <option key={f.value} value={f.value}>
@@ -294,10 +478,10 @@ export default function Applications() {
             <input
               type="date"
               value={bioFrom}
-              onChange={(e) => {
-                setBioFrom(e.target.value);
-                setPage(1);
-              }}
+              max={bioTo || undefined}
+              aria-invalid={!dateRangeIsValid}
+              aria-describedby={!dateRangeIsValid ? "biometrics-range-error" : undefined}
+              onChange={(e) => setParam("bioFrom", e.target.value)}
             />
           </label>
           <label className="date-field">
@@ -305,10 +489,10 @@ export default function Applications() {
             <input
               type="date"
               value={bioTo}
-              onChange={(e) => {
-                setBioTo(e.target.value);
-                setPage(1);
-              }}
+              min={bioFrom || undefined}
+              aria-invalid={!dateRangeIsValid}
+              aria-describedby={!dateRangeIsValid ? "biometrics-range-error" : undefined}
+              onChange={(e) => setParam("bioTo", e.target.value)}
             />
           </label>
           {hasExtraFilters && (
@@ -318,13 +502,18 @@ export default function Applications() {
           )}
         </div>
 
-        {summary && (
-          <div className="result-summary">
-            <div><strong>{summary.total}</strong><span>Matching timelines</span></div>
-            <div><strong>{summary.measured > 0 ? `${round1(summary.medianWD)} WD` : "—"}</strong><span>Median duration</span></div>
-            <div><strong>{summary.measured > 0 ? `${round1(summary.avgWD)} WD` : "—"}</strong><span>Average duration</span></div>
-            <p>{summary.measured} entries have enough dates to measure.</p>
-          </div>
+        {dateRangeError && (
+          <p id="biometrics-range-error" className="filter-error error-text" role="alert">
+            {dateRangeError}
+          </p>
+        )}
+
+        {dateRangeIsValid && presentedSummary && (
+          <StatCards
+            variant="result"
+            items={presentedSummary.items}
+            footnote={presentedSummary.footnote}
+          />
         )}
       </div>
 
@@ -335,15 +524,15 @@ export default function Applications() {
         </p>
       )}
 
-      {error && <p className="empty-hint">{error}</p>}
+      {dateRangeIsValid && error && <p className="empty-hint">{error}</p>}
 
-      {!error && !result && <p className="empty-hint">Loading…</p>}
+      {dateRangeIsValid && !error && !result && <p className="empty-hint">Loading…</p>}
 
-      {!error && result && result.items.length === 0 && (
+      {dateRangeIsValid && !error && result && result.items.length === 0 && (
         <p className="empty-hint">No applications match this filter yet.</p>
       )}
 
-      {!error && result && result.items.length > 0 && (
+      {dateRangeIsValid && !error && result && result.items.length > 0 && (
         <>
           <div className="table-scroll">
           <table className="waiting-table applications-table">
@@ -382,19 +571,19 @@ export default function Applications() {
                     <td>
                       <DaysCell
                         start={processingStartDate(item)}
-                        end={item.eco_email_date ? new Date(item.eco_email_date) : null}
+                        end={item.eco_email_date || null}
                       />
                     </td>
                     <td>
                       <DaysCell
                         start={processingStartDate(item)}
-                        end={item.rfi_date ? new Date(item.rfi_date) : null}
+                        end={item.rfi_date || null}
                       />
                     </td>
                     <td>
                       <DaysCell
                         start={processingStartDate(item)}
-                        end={item.nsf_email_date ? new Date(item.nsf_email_date) : null}
+                        end={item.nsf_email_date || null}
                       />
                     </td>
                     <td>{item.outcome === "rejected" ? item.rejection_reason || "—" : "—"}</td>
@@ -415,7 +604,7 @@ export default function Applications() {
           </div>
 
           <div className="pagination">
-            <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+            <button disabled={page <= 1} onClick={() => setPage(page - 1)}>
               Previous
             </button>
             <span>
@@ -423,7 +612,7 @@ export default function Applications() {
             </span>
             <button
               disabled={page >= result.totalPages}
-              onClick={() => setPage((p) => p + 1)}
+              onClick={() => setPage(page + 1)}
             >
               Next
             </button>
