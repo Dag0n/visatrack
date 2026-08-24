@@ -708,6 +708,103 @@
   color: var(--color-primary);
 }
 
+.recent-decisions {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.recent-decisions li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 14px;
+}
+
+.recent-decisions li:last-child {
+  border-bottom: none;
+}
+
+.recent-route {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.recent-route small {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.recent-days {
+  font-weight: 700;
+  color: var(--color-heading);
+  white-space: nowrap;
+}
+
+.recent-date {
+  color: var(--color-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.impact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.impact-list li p {
+  margin: 4px 0 0;
+  font-size: 14px;
+  color: var(--color-muted);
+}
+
+.impact-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.impact-delta {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  background: #e3f6ec;
+  color: #1e8754;
+}
+
+.impact-delta.slower {
+  background: #fff4dc;
+  color: #a56d16;
+}
+
+.cohort-window {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f1f6fb;
+  font-size: 14px;
+}
+
+.cohort-recent {
+  font-size: 13px;
+}
+
+.cohort-recent a {
+  color: var(--color-primary);
+}
+
 .milestone-chip {
   display: inline-block;
   padding: 3px 10px;
@@ -1952,7 +2049,9 @@
     padding: 14px;
   }
 
-  .summary-card:last-child {
+  /* Only stretch the final card when it would otherwise sit alone in the
+     grid row (odd card counts) — even counts keep a clean 2×N layout. */
+  .summary-card:last-child:nth-child(odd) {
     grid-column: 1 / -1;
   }
 

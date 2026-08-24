@@ -6,8 +6,10 @@ import GroupBarChart from "../components/GroupBarChart";
 import CountryTable from "../components/CountryTable";
 import MonthlyTable from "../components/MonthlyTable";
 import StatCards from "../components/StatCards";
+import MilestoneImpact from "../components/MilestoneImpact";
+import RecentDecisions from "../components/RecentDecisions";
 import { PRIORITY_LABELS, VISA_TYPE_LABELS } from "../lib/labels";
-import { formatApprovalRate } from "../lib/format";
+import { formatApprovalRate, round1 } from "../lib/format";
 
 export default function Dashboard() {
   const { isLoggedIn } = useAuth();
@@ -98,6 +100,17 @@ export default function Dashboard() {
         items={[
           { icon: "↗", iconClass: "blue", value: stats.total, label: "Timelines shared" },
           { icon: "◷", iconClass: "amber", value: pending, label: "Currently waiting" },
+          ...(stats.bioWait?.count > 0
+            ? [
+                {
+                  icon: "→",
+                  iconClass: "blue",
+                  value: `${round1(stats.bioWait.medianDays)} days`,
+                  label: "Typical wait to biometrics",
+                  meta: `application → appointment · median of ${stats.bioWait.count}`,
+                },
+              ]
+            : []),
           {
             icon: "✓",
             iconClass: "green",
@@ -125,6 +138,8 @@ export default function Dashboard() {
           data={stats.byPriority ?? {}}
           labels={PRIORITY_LABELS}
         />
+        <MilestoneImpact impact={stats.milestoneImpact} />
+        <RecentDecisions />
       </div>
       <CountryTable
         data={stats.byCountry ?? []}
