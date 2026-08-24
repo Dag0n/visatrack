@@ -205,6 +205,10 @@ export default function CountryStats() {
                     iconClass: "amber",
                     value: active.pending,
                     label: "Currently waiting",
+                    meta:
+                      active.bioWaitCount > 0
+                        ? `Typically ${round1(active.medianBioWaitDays)} days from application to biometrics`
+                        : undefined,
                   },
                   {
                     icon: "⧗",
