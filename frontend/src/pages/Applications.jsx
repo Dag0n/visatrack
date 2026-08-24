@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { pb } from "../lib/pb";
 import { fetchCustom, isAbortError } from "../lib/api";
 import { useAuth } from "../lib/auth.jsx";
 import { PRIORITY_LABELS, VISA_TYPE_LABELS } from "../lib/labels";
 import { formatRedditUsername, round1 } from "../lib/format";
+import { usePageTitle } from "../lib/usePageTitle";
 import { calendarDaysBetween, processingStartDate, workingDaysBetween } from "../lib/processingDays";
 import FilterButtonGroup from "../components/FilterButtonGroup";
 import StatCards from "../components/StatCards";
@@ -196,19 +197,26 @@ function csvCell(value) {
 function Milestones({ item }) {
   const start = processingStartDate(item);
   const milestones = [
-    ["ECO", item.eco_email_date],
-    ["RFI", item.rfi_date],
-    ["NSF", item.nsf_email_date],
-  ].filter(([, date]) => date);
+    ["ECO", "ECO email", item.eco_email_date],
+    ["RFI", "Request for further information", item.rfi_date],
+    ["NSF", "Not-straightforward email", item.nsf_email_date],
+  ].filter(([, , date]) => date);
 
   if (!milestones.length) return "—";
   return (
     <span className="milestone-cell">
-      {milestones.map(([label, date]) => (
-        <span key={label}>
-          <strong>{label}</strong> {dateOnly(date)} · <DaysCell start={start} end={date} />
-        </span>
-      ))}
+      {milestones.map(([label, name, date]) => {
+        const workingDays = start ? workingDaysBetween(start, date) : null;
+        const detail = `${name} on ${dateOnly(date)}${
+          workingDays != null ? ` · ${workingDays} working days from biometrics` : ""
+        }`;
+        return (
+          <span key={label} className="milestone-chip" title={detail} aria-label={detail}>
+            {label}
+            {workingDays != null ? ` · ${workingDays} WD` : ""}
+          </span>
+        );
+      })}
     </span>
   );
 }
@@ -262,6 +270,7 @@ function ApplicationMobileCard({ item, highlighted }) {
 }
 
 export default function Applications() {
+  usePageTitle("Community applications");
   const { user, isLoggedIn } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [resultState, setResultState] = useState(null);
@@ -270,6 +279,7 @@ export default function Applications() {
   const [ownItemsState, setOwnItemsState] = useState(null);
   const [retryKey, setRetryKey] = useState(0);
   const [actionStatus, setActionStatus] = useState("");
+  const resultsRef = useRef(null);
 
   const filter = optionParam(searchParams, "status", FILTERS);
   const visaType = optionParam(searchParams, "visa", VISA_TYPE_FILTERS);
@@ -306,6 +316,26 @@ export default function Applications() {
       else next.set("page", String(value));
       return next;
     });
+    // Bring the new page's first rows into view — otherwise "Next" at the
+    // bottom of a page leaves the viewport on the last rows with no visible
+    // change.
+    resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function resetAllFilters() {
+    setSearchParams(new URLSearchParams());
+  }
+
+  // Column-header sorting for the date columns, kept in sync with the same
+  // `sort` URL param the select uses. Clicking toggles newest/oldest.
+  function toggleHeaderSort(field) {
+    setParam("sort", sort === `-${field}` ? field : `-${field}`);
+  }
+
+  function headerSortState(field) {
+    if (sort === `-${field}`) return "descending";
+    if (sort === field) return "ascending";
+    return "none";
   }
 
   const hasExtraFilters =
@@ -693,11 +723,16 @@ export default function Applications() {
       {dateRangeIsValid && !error && !result && <p className="empty-hint">Loading…</p>}
 
       {dateRangeIsValid && !error && result && result.items.length === 0 && (
-        <p className="empty-hint">No applications match this filter yet.</p>
+        <div className="empty-hint">
+          <p>No applications match this filter yet.</p>
+          <button type="button" className="small-button" onClick={resetAllFilters}>
+            Reset all filters
+          </button>
+        </div>
       )}
 
       {dateRangeIsValid && !error && result && result.items.length > 0 && (
-        <>
+        <div ref={resultsRef}>
           <div className="table-scroll">
           <table className="waiting-table applications-table">
             <thead>
@@ -706,8 +741,21 @@ export default function Applications() {
                 <th>Visa type</th>
                 <th>Priority</th>
                 <th>Outcome</th>
-                <th>Applied on</th>
-                <th>Bio on</th>
+                {[["Applied on", "application_date"], ["Bio on", "biometrics_date"]].map(
+                  ([label, field]) => (
+                    <th
+                      key={field}
+                      className="sortable-header"
+                      onClick={() => toggleHeaderSort(field)}
+                      aria-sort={headerSortState(field)}
+                      title={`Sort by ${label.toLowerCase()}`}
+                    >
+                      {label}
+                      {headerSortState(field) === "ascending" && " ↑"}
+                      {headerSortState(field) === "descending" && " ↓"}
+                    </th>
+                  ),
+                )}
                 <th>From bio</th>
                 <th>Milestones</th>
                 <th>Reason</th>
@@ -720,7 +768,15 @@ export default function Applications() {
                     key={item.id}
                     className={ownCombos.has(ownComboKey(item)) ? "row-highlight" : undefined}
                   >
-                    <td>{item.expand?.country_id?.name ?? "—"}</td>
+                    <td>
+                      {item.expand?.country_id?.name ? (
+                        <Link to={`/country/${encodeURIComponent(item.expand.country_id.name)}`}>
+                          {item.expand.country_id.name}
+                        </Link>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     <td>{VISA_TYPE_LABELS[item.visa_type] ?? item.visa_type}</td>
                     <td>{PRIORITY_LABELS[item.priority_service] ?? item.priority_service}</td>
                     <td><StatusBadge outcome={item.outcome} /></td>
@@ -762,7 +818,7 @@ export default function Applications() {
               Next
             </button>
           </div>
-        </>
+        </div>
       )}
     </div>
   );
