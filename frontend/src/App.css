@@ -110,35 +110,6 @@
   color: var(--color-accent);
 }
 
-.summary-row {
-  display: flex;
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.summary-card {
-  min-width: 0;
-  flex: 1;
-  background: var(--color-panel);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.summary-value {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--color-primary);
-}
-
-.summary-label {
-  color: var(--color-text);
-  font-size: 13px;
-}
-
 .back-link {
   display: inline-block;
   margin-bottom: 12px;
@@ -245,7 +216,9 @@
 }
 
 .waiting-table th,
-.waiting-table td {
+.waiting-table td,
+.country-table th,
+.country-table td {
   text-align: left;
   padding: 10px 12px;
   border-bottom: 1px solid var(--color-border);
@@ -305,14 +278,6 @@
 .country-table {
   width: 100%;
   border-collapse: collapse;
-}
-
-.country-table th,
-.country-table td {
-  text-align: left;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--color-border);
-  font-size: 14px;
 }
 
 .required-marker {
@@ -936,15 +901,19 @@
 }
 
 .summary-row {
+  display: flex;
   gap: 14px;
   margin-bottom: 24px;
 }
 
 .summary-card {
+  min-width: 0;
+  flex: 1;
   min-height: 92px;
   padding: 18px;
   border: 1px solid rgba(218, 227, 237, 0.9);
   border-radius: 15px;
+  display: flex;
   flex-direction: row;
   align-items: center;
   gap: 14px;
@@ -985,10 +954,13 @@
 .summary-value {
   line-height: 1.15;
   font-size: 26px;
+  font-weight: 700;
+  color: var(--color-primary);
 }
 
 .summary-label {
   color: var(--color-muted);
+  font-size: 13px;
 }
 
 .summary-meta {
@@ -1167,15 +1139,15 @@
   position: relative;
   margin: 25px 0 22px;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(var(--milestone-count, 4), 1fr);
 }
 
 .milestone-timeline::before {
   content: "";
   position: absolute;
   top: 12px;
-  left: 12.5%;
-  right: 12.5%;
+  left: calc(50% / var(--milestone-count, 4));
+  right: calc(50% / var(--milestone-count, 4));
   height: 2px;
   background: var(--color-border);
 }
@@ -1205,6 +1177,17 @@
 
 .milestone.complete {
   color: var(--color-primary);
+}
+
+.application-notes {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--color-border);
+  border-radius: 0 8px 8px 0;
+  background: #f7fafc;
+  color: var(--color-muted);
+  font-size: 13px;
+  white-space: pre-wrap;
 }
 
 .milestone.complete .milestone-dot {
@@ -1527,6 +1510,10 @@
   font: inherit;
   font-size: 14px;
   background: #f9fbfd;
+}
+
+.explorer-panel .filter-error {
+  margin: 4px 0 12px;
 }
 
 .explorer-controls .clear-filters {

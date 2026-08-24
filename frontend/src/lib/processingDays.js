@@ -1,7 +1,16 @@
 import { isBankHoliday } from "./ukBankHolidays";
 
+// PocketBase date strings are UTC midnight ("2026-05-01 00:00:00.000Z").
+// All calendar math below must stay in UTC — mixing local getDay() with the
+// UTC-based bank-holiday lookup shifts "Day 1" onto a weekend for users west
+// of UTC and makes working-day counts disagree with the backend.
+export function parseUTCDate(value) {
+  if (value instanceof Date) return new Date(value.getTime());
+  return new Date(String(value).replace(" ", "T"));
+}
+
 function isWeekend(date) {
-  const day = date.getDay();
+  const day = date.getUTCDay();
   return day === 0 || day === 6;
 }
 
@@ -12,25 +21,26 @@ function isNonWorkingDay(date) {
 // UKVI counts "Day 1" of processing time as the first working day
 // after the biometrics appointment.
 export function firstWorkingDayAfter(dateStr) {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + 1);
+  const d = parseUTCDate(dateStr);
+  d.setUTCDate(d.getUTCDate() + 1);
   while (isNonWorkingDay(d)) {
-    d.setDate(d.getDate() + 1);
+    d.setUTCDate(d.getUTCDate() + 1);
   }
   return d;
 }
 
 export function calendarDaysBetween(from, to) {
-  const diff = to.getTime() - from.getTime();
+  const diff = parseUTCDate(to).getTime() - parseUTCDate(from).getTime();
   return Math.max(0, Math.round(diff / (1000 * 60 * 60 * 24)));
 }
 
 export function workingDaysBetween(from, to) {
   let count = 0;
-  const cur = new Date(from);
-  while (cur <= to) {
+  const cur = parseUTCDate(from);
+  const end = parseUTCDate(to);
+  while (cur <= end) {
     if (!isNonWorkingDay(cur)) count++;
-    cur.setDate(cur.getDate() + 1);
+    cur.setUTCDate(cur.getUTCDate() + 1);
   }
   return count;
 }
