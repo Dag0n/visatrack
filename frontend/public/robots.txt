@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /my-application
+Disallow: /settings
+Disallow: /login
+
+Sitemap: https://visatrack.uk/sitemap.xml
