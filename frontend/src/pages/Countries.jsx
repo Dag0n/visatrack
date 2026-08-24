@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { pb } from "../lib/pb";
+import { fetchCustom, isAbortError } from "../lib/api";
 import CountryTable from "../components/CountryTable";
 
 export default function Countries() {
@@ -8,14 +8,13 @@ export default function Countries() {
   const [countryPriority, setCountryPriority] = useState("none");
 
   useEffect(() => {
-    const base = pb.baseURL.replace(/\/$/, "");
-    fetch(`${base}/api/custom/stats?countryPriority=${countryPriority}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Countries request failed");
-        return res.json();
-      })
+    const controller = new AbortController();
+    fetchCustom(`/stats?countryPriority=${countryPriority}`, { signal: controller.signal })
       .then(setStats)
-      .catch(() => setError("Couldn't load countries right now."));
+      .catch((err) => {
+        if (!isAbortError(err)) setError("Couldn't load countries right now.");
+      });
+    return () => controller.abort();
   }, [countryPriority]);
 
   if (error) return <p className="empty-hint">{error}</p>;

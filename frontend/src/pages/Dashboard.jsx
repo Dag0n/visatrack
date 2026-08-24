@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { pb } from "../lib/pb";
 import { useAuth } from "../lib/auth.jsx";
+import { fetchCustom, isAbortError } from "../lib/api";
 import GroupBarChart from "../components/GroupBarChart";
 import CountryTable from "../components/CountryTable";
 import MonthlyTable from "../components/MonthlyTable";
+import StatCards from "../components/StatCards";
 import { PRIORITY_LABELS, VISA_TYPE_LABELS } from "../lib/labels";
+import { formatApprovalRate } from "../lib/format";
 
 export default function Dashboard() {
   const { isLoggedIn } = useAuth();
@@ -14,14 +16,13 @@ export default function Dashboard() {
   const [countryPriority, setCountryPriority] = useState("none");
 
   useEffect(() => {
-    const base = pb.baseURL.replace(/\/$/, "");
-    fetch(`${base}/api/custom/stats?countryPriority=${countryPriority}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Stats request failed");
-        return res.json();
-      })
+    const controller = new AbortController();
+    fetchCustom(`/stats?countryPriority=${countryPriority}`, { signal: controller.signal })
       .then(setStats)
-      .catch(() => setError("Couldn't load stats right now."));
+      .catch((err) => {
+        if (!isAbortError(err)) setError("Couldn't load stats right now.");
+      });
+    return () => controller.abort();
   }, [countryPriority]);
 
   if (error) {
@@ -36,12 +37,6 @@ export default function Dashboard() {
   const approved = outcomes.approved ?? 0;
   const rejected = outcomes.rejected ?? 0;
   const pending = outcomes.pending ?? 0;
-  const decided = approved + rejected;
-  const approvalRate = decided > 0 ? (approved / decided) * 100 : null;
-  const formattedApprovalRate =
-    approvalRate === null
-      ? "—"
-      : `${approvalRate === 100 ? "100" : approvalRate.toFixed(1)}%`;
   return (
     <div className="dashboard-page">
       <section className="hero">
@@ -77,34 +72,19 @@ export default function Dashboard() {
         <span className="data-note">Based on self-reported timelines</span>
       </div>
 
-      <div className="summary-row">
-        <div className="summary-card">
-          <span className="summary-icon blue">↗</span>
-          <div>
-            <span className="summary-value">{stats.total}</span>
-            <span className="summary-label">Timelines shared</span>
-          </div>
-        </div>
-        <div className="summary-card">
-          <span className="summary-icon amber">◷</span>
-          <div>
-            <span className="summary-value">{pending}</span>
-            <span className="summary-label">Currently waiting</span>
-          </div>
-        </div>
-        <div className="summary-card">
-          <span className="summary-icon green">✓</span>
-          <div>
-            <span className="summary-value">
-              {formattedApprovalRate}
-            </span>
-            <span className="summary-label">Self-reported approval share</span>
-            <span className="summary-meta">
-              {approved} approved · {rejected} rejected
-            </span>
-          </div>
-        </div>
-      </div>
+      <StatCards
+        items={[
+          { icon: "↗", iconClass: "blue", value: stats.total, label: "Timelines shared" },
+          { icon: "◷", iconClass: "amber", value: pending, label: "Currently waiting" },
+          {
+            icon: "✓",
+            iconClass: "green",
+            value: formatApprovalRate(approved, approved + rejected),
+            label: "Self-reported approval share",
+            meta: `${approved} approved · ${rejected} rejected`,
+          },
+        ]}
+      />
 
       <div className="section-heading compact">
         <div>
@@ -115,12 +95,12 @@ export default function Dashboard() {
       <div className="chart-grid">
         <GroupBarChart
           title="By visa type"
-          data={stats.byVisaType ?? []}
+          data={stats.byVisaType ?? {}}
           labels={VISA_TYPE_LABELS}
         />
         <GroupBarChart
           title="By service level"
-          data={stats.byPriority ?? []}
+          data={stats.byPriority ?? {}}
           labels={PRIORITY_LABELS}
         />
       </div>
@@ -128,6 +108,7 @@ export default function Dashboard() {
         data={stats.byCountry ?? []}
         priorityFilter={countryPriority}
         onPriorityFilterChange={setCountryPriority}
+        limit={10}
       />
       <MonthlyTable data={stats.byMonth ?? {}} />
 
