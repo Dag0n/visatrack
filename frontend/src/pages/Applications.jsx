@@ -14,6 +14,7 @@ const PER_PAGE = 20;
 const COUNTRY_DEBOUNCE_MS = 300;
 const LIST_REQUEST_KEY = "applications-explorer-list";
 const OWN_ITEMS_REQUEST_KEY = "applications-explorer-own-items";
+const EXPORT_REQUEST_KEY = "applications-explorer-export";
 
 const FILTERS = [
   { value: "pending", label: "In progress" },
@@ -183,6 +184,83 @@ function processingEnd(item) {
   return item.decision_date || null;
 }
 
+function dateOnly(value) {
+  return value?.slice(0, 10) || "";
+}
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function Milestones({ item }) {
+  const start = processingStartDate(item);
+  const milestones = [
+    ["ECO", item.eco_email_date],
+    ["RFI", item.rfi_date],
+    ["NSF", item.nsf_email_date],
+  ].filter(([, date]) => date);
+
+  if (!milestones.length) return "—";
+  return (
+    <span className="milestone-cell">
+      {milestones.map(([label, date]) => (
+        <span key={label}>
+          <strong>{label}</strong> {dateOnly(date)} · <DaysCell start={start} end={date} />
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function Source({ item }) {
+  return (
+    <span className="source-cell">
+      <span>{formatRedditUsername(item.reddit_username)}</span>
+      {item.reddit_post_url && (
+        <a href={item.reddit_post_url} target="_blank" rel="noreferrer">
+          View post
+        </a>
+      )}
+    </span>
+  );
+}
+
+function ApplicationMobileCard({ item, highlighted }) {
+  return (
+    <article className={`explorer-result-card${highlighted ? " row-highlight" : ""}`}>
+      <div className="explorer-result-card-heading">
+        <div>
+          <strong>{item.expand?.country_id?.name ?? "Country not set"}</strong>
+          <span>
+            {VISA_TYPE_LABELS[item.visa_type] ?? item.visa_type} ·{" "}
+            {PRIORITY_LABELS[item.priority_service] ?? item.priority_service}
+          </span>
+        </div>
+        <StatusBadge outcome={item.outcome} />
+      </div>
+      <div className="explorer-result-card-stats">
+        <span><small>Biometrics</small>{dateOnly(item.biometrics_date) || "—"}</span>
+        <span>
+          <small>{item.outcome === "pending" ? "Current wait" : "Processing"}</small>
+          <DaysCell start={processingStartDate(item)} end={processingEnd(item)} />
+        </span>
+      </div>
+      <details>
+        <summary>Dates and milestones</summary>
+        <dl>
+          <div><dt>Applied</dt><dd>{dateOnly(item.application_date) || "—"}</dd></div>
+          <div><dt>Milestones</dt><dd><Milestones item={item} /></dd></div>
+          {item.outcome === "rejected" && (
+            <div><dt>Reason</dt><dd>{item.rejection_reason || "—"}</dd></div>
+          )}
+          <div><dt>Source</dt><dd><Source item={item} /></dd></div>
+        </dl>
+      </details>
+    </article>
+  );
+}
+
 export default function Applications() {
   const { user, isLoggedIn } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -190,6 +268,8 @@ export default function Applications() {
   const [errorState, setErrorState] = useState(null);
   const [summaryState, setSummaryState] = useState(null);
   const [ownItemsState, setOwnItemsState] = useState(null);
+  const [retryKey, setRetryKey] = useState(0);
+  const [actionStatus, setActionStatus] = useState("");
 
   const filter = optionParam(searchParams, "status", FILTERS);
   const visaType = optionParam(searchParams, "visa", VISA_TYPE_FILTERS);
@@ -339,7 +419,7 @@ export default function Applications() {
       ignore = true;
       pb.cancelRequest(LIST_REQUEST_KEY);
     };
-  }, [dateRangeIsValid, page, pageIsCanonical, pbFilter, pbSort, listRequestKey, setSearchParams]);
+  }, [dateRangeIsValid, page, pageIsCanonical, pbFilter, pbSort, listRequestKey, retryKey, setSearchParams]);
 
   useEffect(() => {
     if (!dateRangeIsValid) return undefined;
@@ -396,6 +476,65 @@ export default function Applications() {
   }, [isLoggedIn, ownItemsState, user?.id]);
 
   const presentedSummary = summary ? summaryPresentation(summary, filter) : null;
+  const filtersSettling = country !== debouncedCountry;
+
+  async function copyFilteredLink() {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setActionStatus("Filtered link copied.");
+    } catch {
+      window.prompt("Copy this filtered link:", window.location.href);
+      setActionStatus("");
+    }
+  }
+
+  async function exportCsv() {
+    if (!dateRangeIsValid || filtersSettling) return;
+    setActionStatus("Preparing CSV…");
+    try {
+      const items = await pb.collection("applications").getFullList({
+        filter: pbFilter,
+        sort: pbSort,
+        expand: "country_id",
+        requestKey: EXPORT_REQUEST_KEY,
+      });
+      const headings = [
+        "Country", "Visa type", "Priority service", "Outcome", "Application date",
+        "Biometrics date", "Decision date", "Working days from biometrics", "ECO date",
+        "RFI date", "NSF date", "Rejection reason", "Reddit username", "Reddit post",
+      ];
+      const rows = items.map((item) => {
+        const start = processingStartDate(item);
+        const end = processingEnd(item);
+        return [
+          item.expand?.country_id?.name,
+          VISA_TYPE_LABELS[item.visa_type] ?? item.visa_type,
+          PRIORITY_LABELS[item.priority_service] ?? item.priority_service,
+          item.outcome,
+          dateOnly(item.application_date),
+          dateOnly(item.biometrics_date),
+          dateOnly(item.decision_date),
+          start && end ? workingDaysBetween(start, end) : "",
+          dateOnly(item.eco_email_date),
+          dateOnly(item.rfi_date),
+          dateOnly(item.nsf_email_date),
+          item.rejection_reason,
+          formatRedditUsername(item.reddit_username),
+          item.reddit_post_url,
+        ];
+      });
+      const csv = [headings, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
+      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `visatrack-applications-${new Date().toISOString().slice(0, 10)}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setActionStatus(`Downloaded ${items.length} matching timeline${items.length === 1 ? "" : "s"}.`);
+    } catch (err) {
+      if (!err?.isAbort) setActionStatus("Couldn't create the CSV. Please try again.");
+    }
+  }
 
   return (
     <div className="applications-page">
@@ -416,6 +555,7 @@ export default function Applications() {
           options={FILTERS}
           value={filter}
           onChange={(value) => setParam("status", value)}
+          label="Application status"
         />
 
         <div className="filter-row explorer-controls">
@@ -515,6 +655,23 @@ export default function Applications() {
             footnote={presentedSummary.footnote}
           />
         )}
+
+        <div className="explorer-actions">
+          <button type="button" className="small-button" onClick={copyFilteredLink}>
+            Copy filtered link
+          </button>
+          <button
+            type="button"
+            className="small-button"
+            disabled={!dateRangeIsValid || filtersSettling || actionStatus === "Preparing CSV…"}
+            onClick={exportCsv}
+          >
+            Download CSV
+          </button>
+          <span className="optional-hint" role="status" aria-live="polite">
+            {actionStatus}
+          </span>
+        </div>
       </div>
 
       {ownCombos.size > 0 && (
@@ -524,7 +681,14 @@ export default function Applications() {
         </p>
       )}
 
-      {dateRangeIsValid && error && <p className="empty-hint">{error}</p>}
+      {dateRangeIsValid && error && (
+        <div className="inline-error" role="alert">
+          <span>{error}</span>
+          <button type="button" className="small-button" onClick={() => setRetryKey((key) => key + 1)}>
+            Try again
+          </button>
+        </div>
+      )}
 
       {dateRangeIsValid && !error && !result && <p className="empty-hint">Loading…</p>}
 
@@ -545,12 +709,9 @@ export default function Applications() {
                 <th>Applied on</th>
                 <th>Bio on</th>
                 <th>From bio</th>
-                <th>ECO email</th>
-                <th>RFI</th>
-                <th>NSF email</th>
+                <th>Milestones</th>
                 <th>Reason</th>
-                <th>Post</th>
-                <th>Redditor</th>
+                <th>Source</th>
               </tr>
             </thead>
             <tbody>
@@ -563,44 +724,28 @@ export default function Applications() {
                     <td>{VISA_TYPE_LABELS[item.visa_type] ?? item.visa_type}</td>
                     <td>{PRIORITY_LABELS[item.priority_service] ?? item.priority_service}</td>
                     <td><StatusBadge outcome={item.outcome} /></td>
-                    <td>{item.application_date?.slice(0, 10) || "—"}</td>
-                    <td>{item.biometrics_date?.slice(0, 10) || "—"}</td>
+                    <td>{dateOnly(item.application_date) || "—"}</td>
+                    <td>{dateOnly(item.biometrics_date) || "—"}</td>
                     <td>
                       <DaysCell start={processingStartDate(item)} end={processingEnd(item)} />
                     </td>
-                    <td>
-                      <DaysCell
-                        start={processingStartDate(item)}
-                        end={item.eco_email_date || null}
-                      />
-                    </td>
-                    <td>
-                      <DaysCell
-                        start={processingStartDate(item)}
-                        end={item.rfi_date || null}
-                      />
-                    </td>
-                    <td>
-                      <DaysCell
-                        start={processingStartDate(item)}
-                        end={item.nsf_email_date || null}
-                      />
-                    </td>
+                    <td><Milestones item={item} /></td>
                     <td>{item.outcome === "rejected" ? item.rejection_reason || "—" : "—"}</td>
-                    <td>
-                      {item.reddit_post_url ? (
-                        <a href={item.reddit_post_url} target="_blank" rel="noreferrer">
-                          View post
-                        </a>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td>{formatRedditUsername(item.reddit_username)}</td>
+                    <td><Source item={item} /></td>
                   </tr>
               ))}
             </tbody>
           </table>
+          </div>
+
+          <div className="applications-mobile-list">
+            {result.items.map((item) => (
+              <ApplicationMobileCard
+                key={item.id}
+                item={item}
+                highlighted={ownCombos.has(ownComboKey(item))}
+              />
+            ))}
           </div>
 
           <div className="pagination">
